@@ -1,0 +1,23 @@
+{
+  "server_url": "https://hal-saas.tuodominio.it",
+  "token": "INCOLLA-QUI-IL-TOKEN-DAL-TUO-ACCOUNT",
+  "ingest_path": "/api/agent/ingest",
+  "interval_minutes": 60,
+  "days_limit": 7,
+  "agents": [
+    {
+      "name": "Scout AI",
+      "keywords": ["intelligenza artificiale", "AI", "LLM"],
+      "rss_feeds": ["https://openai.com/blog/rss.xml"],
+      "reddit_subreddits": ["MachineLearning"],
+      "youtube_channels": ["@OpenAI"]
+    }
+  ],
+  "llm_bridge": {
+    "enabled": false,
+    "provider": "ollama",
+    "endpoint": "http://localhost:11434",
+    "poll_path": "/api/agent/jobs",
+    "result_path": "/api/agent/jobs/result"
+  }
+}

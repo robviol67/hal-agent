@@ -1,0 +1,72 @@
+"""
+Ponte LLM locale (opzionale).
+
+Modello "outbound polling": l'agente CHIEDE al SaaS se ci sono job di generazione,
+li esegue contro l'LLM locale (Ollama / LM Studio, API OpenAI-compatibile) e rimanda
+il risultato. Così NON serve alcun tunnel in ingresso (niente NAT/firewall aperti).
+
+Contratto lato SaaS (da implementare):
+  GET  {server_url}{poll_path}      -> { "job": {id, prompt, model, max_tokens} } | { "job": null }
+  POST {server_url}{result_path}    <- { "job_id": ..., "text": "..." }
+"""
+import logging
+import httpx
+
+from . import config as cfg
+
+log = logging.getLogger("hal_agent.llm")
+
+
+def _headers(conf):
+    h = {"Content-Type": "application/json"}
+    if conf.get("token"):
+        h["Authorization"] = f"Bearer {conf['token']}"
+    return h
+
+
+def poll_and_run_once(conf: dict) -> bool:
+    """Preleva un job dal SaaS, lo esegue in locale e invia il risultato. True se ha lavorato."""
+    br = conf.get("llm_bridge", {})
+    if not br.get("enabled"):
+        return False
+    server = conf["server_url"].rstrip("/")
+    try:
+        r = httpx.get(server + br.get("poll_path", "/api/agent/jobs"),
+                      headers=_headers(conf), timeout=20)
+        r.raise_for_status()
+        job = (r.json() or {}).get("job")
+    except Exception as e:
+        log.debug("Nessun job / errore poll: %s", e)
+        return False
+    if not job:
+        return False
+
+    text = run_local_llm(br, job.get("prompt", ""), job.get("model"), job.get("max_tokens", 1024))
+    try:
+        httpx.post(server + br.get("result_path", "/api/agent/jobs/result"),
+                   headers=_headers(conf),
+                   json={"job_id": job.get("id"), "text": text}, timeout=30)
+        log.info("Job %s eseguito e restituito", job.get("id"))
+    except Exception as e:
+        log.error("Invio risultato job fallito: %s", e)
+    return True
+
+
+def run_local_llm(bridge: dict, prompt: str, model=None, max_tokens: int = 1024) -> str:
+    """Chiama l'endpoint locale OpenAI-compatibile (Ollama :11434 / LM Studio :1234)."""
+    endpoint = bridge.get("endpoint", "http://localhost:11434").rstrip("/")
+    url = endpoint + "/v1/chat/completions"
+    body = {
+        "model": model or ("llama3" if "11434" in endpoint else "local-model"),
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    try:
+        r = httpx.post(url, json=body, timeout=300)
+        r.raise_for_status()
+        data = r.json()
+        return data["choices"][0]["message"]["content"]
+    except Exception as e:
+        log.error("LLM locale errore (%s): %s", url, e)
+        return ""
