@@ -53,20 +53,31 @@ def poll_and_run_once(conf: dict) -> bool:
 
 
 def run_local_llm(bridge: dict, prompt: str, model=None, max_tokens: int = 1024) -> str:
-    """Chiama l'endpoint locale OpenAI-compatibile (Ollama :11434 / LM Studio :1234)."""
-    endpoint = bridge.get("endpoint", "http://localhost:11434").rstrip("/")
-    url = endpoint + "/v1/chat/completions"
+    """
+    Chiama un endpoint OpenAI-compatibile: locale (Ollama :11434 / LM Studio :1234),
+    tunnel (URL remoto) o provider remoto (es. DeepSeek). Usa api_key/model dalla config.
+    """
+    endpoint = (bridge.get("endpoint") or "http://localhost:11434").rstrip("/")
+    # accetta sia base "…" sia "…/v1"
+    url = endpoint + ("/chat/completions" if endpoint.endswith("/v1") else "/v1/chat/completions")
+
+    mdl = model or bridge.get("model") or ("llama3" if "11434" in endpoint else "local-model")
+    headers = {"Content-Type": "application/json"}
+    key = (bridge.get("api_key") or "").strip()
+    if key:
+        headers["Authorization"] = "Bearer " + key
+
     body = {
-        "model": model or ("llama3" if "11434" in endpoint else "local-model"),
+        "model": mdl,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "stream": False,
     }
     try:
-        r = httpx.post(url, json=body, timeout=300)
+        r = httpx.post(url, json=body, headers=headers, timeout=300)
         r.raise_for_status()
         data = r.json()
         return data["choices"][0]["message"]["content"]
     except Exception as e:
-        log.error("LLM locale errore (%s): %s", url, e)
+        log.error("LLM bridge errore (%s): %s", url, e)
         return ""

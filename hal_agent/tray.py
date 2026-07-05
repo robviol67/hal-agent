@@ -94,6 +94,17 @@ def run_tray():
             ("Ponte LLM ATTIVO → " + ep) if br["enabled"] else "Ponte LLM disattivato",
             "HAL Agent")
 
+    def on_configure_bridge(icon, item):
+        """Apre la finestra di configurazione in un processo separato (Tk sul suo main-loop)."""
+        try:
+            if getattr(sys, "frozen", False):
+                subprocess.Popen([sys.executable, "configui"])
+            else:
+                subprocess.Popen([sys.executable, "-m", "hal_agent", "configui"])
+        except Exception as e:
+            log.error("apertura configurazione fallita: %s", e)
+            _open_config_file()
+
     def on_run_now(icon, item):
         loop.trigger_now()
 
@@ -146,7 +157,8 @@ def run_tray():
         Item(lambda item: f"Stato: {status['text']}", on_status),
         Item("Esegui ora", on_run_now),
         Item("Frequenza raccolta", freq_menu),
-        Item("Ponte LLM locale", on_toggle_bridge, checked=lambda item: _bridge_enabled()),
+        Item("Ponte LLM attivo", on_toggle_bridge, checked=lambda item: _bridge_enabled()),
+        Item("Configura ponte LLM…", on_configure_bridge),
         pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
         Item("Scarica release (GitHub)…", on_open_releases),

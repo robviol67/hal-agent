@@ -37,6 +37,7 @@ def main(argv=None):
 
     sub.add_parser("tray", help="Interfaccia barra di sistema")
     sub.add_parser("config", help="Percorso del file di configurazione")
+    sub.add_parser("configui", help="Finestra di configurazione del Ponte LLM")
 
     pb = sub.add_parser("bridge", help="Ponte LLM locale (Ollama/LM Studio)")
     pb.add_argument("--once", action="store_true")
@@ -47,6 +48,11 @@ def main(argv=None):
     if args.cmd == "config":
         cfg.load_config()
         print(cfg.CONFIG_PATH)
+        return 0
+
+    if args.cmd == "configui":
+        from . import config_window
+        config_window.open_config_window()
         return 0
 
     if args.cmd == "run":

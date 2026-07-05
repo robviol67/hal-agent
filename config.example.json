@@ -19,6 +19,8 @@
     "enabled": false,
     "provider": "ollama",
     "endpoint": "http://localhost:11434",
+    "model": "",
+    "api_key": "",
     "poll_path": "/api/agent/jobs",
     "result_path": "/api/agent/jobs/result"
   }

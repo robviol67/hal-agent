@@ -28,8 +28,10 @@ DEFAULT_CONFIG = {
     ],
     "llm_bridge": {
         "enabled": False,
-        "provider": "ollama",                 # ollama | lmstudio (entrambi OpenAI-compatibili)
-        "endpoint": "http://localhost:11434",
+        "provider": "ollama",                 # ollama | lmstudio | deepseek | custom (OpenAI-compatibili)
+        "endpoint": "http://localhost:11434", # locale, tunnel o URL provider remoto
+        "model": "",                          # nome modello (vuoto = default per il provider)
+        "api_key": "",                        # per provider remoti (es. DeepSeek) o tunnel protetti
         "poll_path": "/api/agent/jobs",       # da dove prelevare i job del SaaS
         "result_path": "/api/agent/jobs/result"
     }
