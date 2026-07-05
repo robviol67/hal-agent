@@ -6,9 +6,23 @@ import sys
 import webbrowser
 
 from . import config as cfg
+from . import __version__
 from .runner import Loop
 
 log = logging.getLogger("hal_agent.tray")
+
+REPO = "robviol67/hal-agent"
+RELEASES_URL = f"https://github.com/{REPO}/releases"
+
+# Opzioni di frequenza raccolta (minuti, etichetta)
+INTERVAL_CHOICES = [
+    (15, "15 minuti"),
+    (30, "30 minuti"),
+    (60, "1 ora"),
+    (120, "2 ore"),
+    (360, "6 ore"),
+    (720, "12 ore"),
+]
 
 
 def _make_icon_image(color=(24, 95, 165)):
@@ -36,6 +50,29 @@ def _open_config_file():
         webbrowser.open("file://" + path)
 
 
+def _parse_version(v: str):
+    """'v0.2.1' / '0.2.1' -> (0, 2, 1) per confronto; parti non numeriche = 0."""
+    v = (v or "").lstrip("vV").strip()
+    out = []
+    for part in v.split("."):
+        num = "".join(ch for ch in part if ch.isdigit())
+        out.append(int(num) if num else 0)
+    return tuple(out) if out else (0,)
+
+
+def _latest_release():
+    """Tag dell'ultima release su GitHub, o None se non raggiungibile."""
+    try:
+        import httpx
+        r = httpx.get(f"https://api.github.com/repos/{REPO}/releases/latest",
+                      headers={"Accept": "application/vnd.github+json"}, timeout=15)
+        r.raise_for_status()
+        return (r.json() or {}).get("tag_name")
+    except Exception as e:
+        log.debug("check release fallito: %s", e)
+        return None
+
+
 def run_tray():
     import pystray
     from pystray import MenuItem as Item
@@ -52,18 +89,57 @@ def run_tray():
     def on_status(icon, item):
         icon.notify(status["text"], "HAL Agent")
 
+    def on_open_releases(icon, item):
+        webbrowser.open(RELEASES_URL)
+
+    def on_check_updates(icon, item):
+        latest = _latest_release()
+        if not latest:
+            icon.notify("Impossibile verificare (nessuna connessione?)", "HAL Agent")
+            return
+        if _parse_version(latest) > _parse_version(__version__):
+            icon.notify(f"Aggiornamento disponibile: {latest} (hai v{__version__}). "
+                        f"Apro la pagina Release…", "HAL Agent")
+            webbrowser.open(RELEASES_URL)
+        else:
+            icon.notify(f"Sei aggiornato (v{__version__}).", "HAL Agent")
+
+    def _make_interval_setter(mins, label):
+        def handler(icon, item):
+            c = cfg.load_config()
+            c["interval_minutes"] = mins
+            cfg.save_config(c)
+            icon.notify(f"Frequenza raccolta: ogni {label}", "HAL Agent")
+        return handler
+
+    def _make_interval_checked(mins):
+        return lambda item: int(cfg.load_config().get("interval_minutes", 60)) == mins
+
     def on_quit(icon, item):
         loop.stop()
         icon.stop()
 
+    freq_menu = pystray.Menu(*[
+        Item(label, _make_interval_setter(mins, label),
+             checked=_make_interval_checked(mins), radio=True)
+        for mins, label in INTERVAL_CHOICES
+    ])
+
     menu = pystray.Menu(
+        Item(f"HAL Agent v{__version__}", lambda icon, item: None, enabled=False),
+        pystray.Menu.SEPARATOR,
         Item(lambda item: f"Stato: {status['text']}", on_status),
         Item("Esegui ora", on_run_now),
+        Item("Frequenza raccolta", freq_menu),
+        pystray.Menu.SEPARATOR,
+        Item("Verifica aggiornamenti…", on_check_updates),
+        Item("Scarica release (GitHub)…", on_open_releases),
         Item("Apri configurazione", on_open_config),
         pystray.Menu.SEPARATOR,
         Item("Esci", on_quit),
     )
-    icon = pystray.Icon("hal_agent", _make_icon_image(), "HAL Agent", menu)
+    icon = pystray.Icon("hal_agent", _make_icon_image(),
+                        f"HAL Agent v{__version__}", menu)
 
     loop.start()
     icon.run()
