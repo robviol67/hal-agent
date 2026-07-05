@@ -7,7 +7,7 @@ import webbrowser
 
 from . import config as cfg
 from . import __version__
-from .runner import Loop
+from .runner import Loop, BridgeLoop
 
 log = logging.getLogger("hal_agent.tray")
 
@@ -79,6 +79,20 @@ def run_tray():
 
     status = {"text": "In avvio…"}
     loop = Loop(on_status=lambda s: status.__setitem__("text", s))
+    bridge = BridgeLoop(on_status=lambda s: status.__setitem__("text", s))
+
+    def _bridge_enabled():
+        return bool((cfg.load_config().get("llm_bridge") or {}).get("enabled"))
+
+    def on_toggle_bridge(icon, item):
+        c = cfg.load_config()
+        br = c.setdefault("llm_bridge", {})
+        br["enabled"] = not bool(br.get("enabled"))
+        cfg.save_config(c)
+        ep = br.get("endpoint", "http://localhost:11434")
+        icon.notify(
+            ("Ponte LLM ATTIVO → " + ep) if br["enabled"] else "Ponte LLM disattivato",
+            "HAL Agent")
 
     def on_run_now(icon, item):
         loop.trigger_now()
@@ -117,6 +131,7 @@ def run_tray():
 
     def on_quit(icon, item):
         loop.stop()
+        bridge.stop()
         icon.stop()
 
     freq_menu = pystray.Menu(*[
@@ -131,6 +146,7 @@ def run_tray():
         Item(lambda item: f"Stato: {status['text']}", on_status),
         Item("Esegui ora", on_run_now),
         Item("Frequenza raccolta", freq_menu),
+        Item("Ponte LLM locale", on_toggle_bridge, checked=lambda item: _bridge_enabled()),
         pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
         Item("Scarica release (GitHub)…", on_open_releases),
@@ -142,4 +158,5 @@ def run_tray():
                         f"HAL Agent v{__version__}", menu)
 
     loop.start()
+    bridge.start()
     icon.run()

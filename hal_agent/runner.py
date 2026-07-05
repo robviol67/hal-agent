@@ -119,3 +119,50 @@ class Loop:
 
     def stop(self):
         self._stop.set()
+
+
+class BridgeLoop:
+    """
+    Loop del ponte LLM: se llm_bridge.enabled è true in config, interroga il
+    SaaS (GET /api/agent/jobs), esegue il job sull'LLM locale (Ollama/LM Studio)
+    e rimanda il risultato. Rilegge la config a ogni giro, così si attiva/spegne
+    senza riavviare l'app.
+    """
+    def __init__(self, on_status=None):
+        self._stop = threading.Event()
+        self._thread = None
+        self.on_status = on_status or (lambda s: None)
+
+    def _status(self, msg):
+        try:
+            self.on_status(msg)
+        except Exception:
+            pass
+
+    def _run(self):
+        from . import llm_bridge
+        while not self._stop.is_set():
+            conf = cfg.load_config()
+            br = conf.get("llm_bridge", {}) or {}
+            if not br.get("enabled"):
+                self._stop.wait(15)   # spento: ricontrolla la config ogni tanto
+                continue
+            worked = False
+            try:
+                worked = llm_bridge.poll_and_run_once(conf)
+                if worked:
+                    self._status("Ponte LLM: job eseguito")
+            except Exception as e:
+                log.debug("Ponte LLM errore: %s", e)
+            # se ha lavorato, riprova subito (potrebbero esserci altri job)
+            self._stop.wait(2 if worked else 5)
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
