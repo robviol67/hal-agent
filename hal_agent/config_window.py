@@ -9,6 +9,8 @@ import logging
 import os
 import subprocess
 import sys
+import threading
+import urllib.error
 import urllib.request
 import webbrowser
 
@@ -44,6 +46,41 @@ def fetch_models(endpoint: str, api_key: str = ""):
         return ids, ("" if ids else "Nessun modello riportato dall'endpoint.")
     except Exception as e:
         return [], str(e)[:140]
+
+
+def test_generation(endpoint: str, model: str, api_key: str = ""):
+    """
+    Prova reale di generazione (piccola chat) sull'endpoint OpenAI-compatibile.
+    Ritorna (ok: bool, testo_o_errore: str).
+    """
+    endpoint = (endpoint or "").rstrip("/")
+    if not endpoint:
+        return False, "Inserisci prima l'endpoint."
+    url = endpoint + ("/chat/completions" if endpoint.endswith("/v1") else "/v1/chat/completions")
+    body = {
+        "model": model or "local-model",
+        "messages": [{"role": "user", "content": "Rispondi con una sola parola: ok"}],
+        "max_tokens": 16,
+        "stream": False,
+    }
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
+                                headers={"Content-Type": "application/json"})
+    if api_key:
+        req.add_header("Authorization", "Bearer " + api_key)
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        choices = d.get("choices") or [{}]
+        txt = ((choices[0].get("message") or {}).get("content") or "").strip()
+        return True, (txt or "(risposta vuota)")
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8")[:200]
+        except Exception:
+            detail = str(e)
+        return False, "HTTP %s — %s" % (e.code, detail)
+    except Exception as e:
+        return False, str(e)[:200]
 
 
 def _open_json_fallback():
@@ -152,8 +189,38 @@ def open_config_window():
         messagebox.showinfo("HAL Agent", "Configurazione del ponte salvata.")
         root.destroy()
 
+    # Prova connessione (in un thread, per non bloccare la finestra)
+    def test_connection():
+        ep, md, key = v_endpoint.get().strip(), v_model.get().strip(), v_key.get().strip()
+        btn_test.config(state="disabled", text="Provo…")
+
+        def work():
+            ok, msg = test_generation(ep, md, key)
+
+            def done():
+                try:
+                    btn_test.config(state="normal", text="Prova connessione")
+                except Exception:
+                    pass
+                if ok:
+                    messagebox.showinfo("HAL Agent", "Connessione riuscita.\n\nRisposta del modello:\n" + msg)
+                else:
+                    messagebox.showerror("HAL Agent", "Test fallito:\n\n" + msg
+                                         + "\n\nControlla endpoint, modello (usa «Rileva modelli») e che il server LLM sia avviato.")
+            try:
+                root.after(0, done)
+            except Exception:
+                pass
+
+        threading.Thread(target=work, daemon=True).start()
+
+    test_row = ttk.Frame(frm)
+    test_row.grid(column=0, row=6, columnspan=2, sticky="w", pady=(0, 8))
+    btn_test = ttk.Button(test_row, text="Prova connessione", command=test_connection)
+    btn_test.grid(column=0, row=0)
+
     btns = ttk.Frame(frm)
-    btns.grid(column=0, row=6, columnspan=2, sticky="e")
+    btns.grid(column=0, row=7, columnspan=2, sticky="e")
     ttk.Button(btns, text="Apri il file JSON", command=_open_json_fallback)\
         .grid(column=0, row=0, padx=(0, 12))
     ttk.Button(btns, text="Annulla", command=root.destroy).grid(column=1, row=0, padx=4)
