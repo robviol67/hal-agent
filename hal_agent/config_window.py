@@ -4,10 +4,12 @@ Gira in un PROPRIO processo (comando `configui`) per non entrare in conflitto
 con il run-loop della menu-bar. Scrive su ~/.hal-agent/config.json; l'agente
 rilegge la config a ogni giro, quindi le modifiche si applicano da sole.
 """
+import json
 import logging
 import os
 import subprocess
 import sys
+import urllib.request
 import webbrowser
 
 from . import config as cfg
@@ -21,6 +23,27 @@ PRESETS = {
     "Ollama (locale)":         {"provider": "ollama",   "endpoint": "http://localhost:11434", "model": "llama3"},
     "Tunnel / Personalizzato": {"provider": "custom",   "endpoint": "",                       "model": ""},
 }
+
+
+def fetch_models(endpoint: str, api_key: str = ""):
+    """
+    Elenca i modelli disponibili sull'endpoint OpenAI-compatibile (GET /v1/models).
+    Ritorna (lista_id, errore). Usa urllib (stdlib) per non dipendere da altro.
+    """
+    endpoint = (endpoint or "").rstrip("/")
+    if not endpoint:
+        return [], "Inserisci prima l'endpoint."
+    url = endpoint + ("/models" if endpoint.endswith("/v1") else "/v1/models")
+    req = urllib.request.Request(url)
+    if api_key:
+        req.add_header("Authorization", "Bearer " + api_key)
+    try:
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        ids = [m.get("id") for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
+        return ids, ("" if ids else "Nessun modello riportato dall'endpoint.")
+    except Exception as e:
+        return [], str(e)[:140]
 
 
 def _open_json_fallback():
@@ -73,16 +96,36 @@ def open_config_window():
     ttk.Entry(frm, textvariable=v_endpoint, width=34).grid(column=1, row=2, sticky="we", pady=3)
 
     ttk.Label(frm, text="Modello").grid(column=0, row=3, sticky="w")
-    ttk.Entry(frm, textvariable=v_model, width=34).grid(column=1, row=3, sticky="we", pady=3)
+    model_row = ttk.Frame(frm)
+    model_row.grid(column=1, row=3, sticky="we", pady=3)
+    model_row.columnconfigure(0, weight=1)
+    model_combo = ttk.Combobox(model_row, textvariable=v_model, width=22)
+    model_combo.grid(column=0, row=0, sticky="we")
+
+    def detect_models():
+        ids, err = fetch_models(v_endpoint.get().strip(), v_key.get().strip())
+        if ids:
+            model_combo["values"] = ids
+            if not v_model.get() or v_model.get() not in ids:
+                v_model.set(ids[0])
+            messagebox.showinfo("HAL Agent",
+                                "Trovati %d modelli. Scegli quello caricato dall'elenco." % len(ids))
+        else:
+            messagebox.showwarning("HAL Agent",
+                                   "Nessun modello rilevato.\n\n" + (err or "")
+                                   + "\n\nControlla che il server LLM sia avviato e l'endpoint corretto.")
+
+    ttk.Button(model_row, text="Rileva modelli", command=detect_models)\
+        .grid(column=1, row=0, padx=(6, 0))
 
     ttk.Label(frm, text="API key").grid(column=0, row=4, sticky="w")
     ttk.Entry(frm, textvariable=v_key, width=34, show="*").grid(column=1, row=4, sticky="we", pady=3)
 
-    hint = ttk.Label(frm, foreground="#888", wraplength=320, justify="left",
-                     text="Per LLM locali (LM Studio/Ollama) o un LLM locale esposto "
-                          "via tunnel (URL remoto + eventuale API key). I provider "
-                          "cloud (Anthropic/Gemini/DeepSeek) si impostano sul sito, "
-                          "in Config → Chiavi AI.")
+    hint = ttk.Label(frm, foreground="#888", wraplength=340, justify="left",
+                     text="Per LLM locali (LM Studio/Ollama) o un LLM locale esposto via "
+                          "tunnel (URL remoto + eventuale API key). Usa «Rileva modelli» "
+                          "per scegliere quello caricato ora. I provider cloud "
+                          "(Anthropic/Gemini/DeepSeek) si impostano sul sito, in Config → Chiavi AI.")
     hint.grid(column=0, row=5, columnspan=2, sticky="w", pady=(8, 12))
 
     def on_preset(*_):
