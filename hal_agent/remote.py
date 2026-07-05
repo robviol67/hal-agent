@@ -78,3 +78,24 @@ def send_status(conf: dict, msg: str) -> None:
                    json={"status": (msg or "")[:255]}, timeout=10)
     except Exception as e:
         log.debug("send_status fallito: %s", e)
+
+
+def report_bridge(conf: dict, enabled: bool, ok: bool, endpoint: str, detail: str) -> None:
+    """
+    Riporta lo stato del ponte LLM (raggiungibilità) al SaaS. NON invia 'status'
+    così non azzera la riga di stato della raccolta.
+    """
+    if not conf.get("token"):
+        return
+    server = conf["server_url"].rstrip("/")
+    path = conf.get("status_path", "/api/agent/status")
+    try:
+        httpx.post(server + path, headers=_headers(conf),
+                   json={"bridge": {
+                       "enabled": bool(enabled),
+                       "ok": bool(ok),
+                       "endpoint": (endpoint or "")[:255],
+                       "detail": (detail or "")[:200],
+                   }}, timeout=10)
+    except Exception as e:
+        log.debug("report_bridge fallito: %s", e)

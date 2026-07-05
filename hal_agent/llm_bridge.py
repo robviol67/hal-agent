@@ -52,6 +52,26 @@ def poll_and_run_once(conf: dict) -> bool:
     return True
 
 
+def check_llm(bridge: dict):
+    """
+    Verifica se l'LLM (locale/tunnel/remoto) risponde: GET .../v1/models.
+    Ritorna (ok: bool, detail: str). detail contiene l'errore se non ok.
+    """
+    endpoint = (bridge.get("endpoint") or "http://localhost:11434").rstrip("/")
+    url = endpoint + ("/models" if endpoint.endswith("/v1") else "/v1/models")
+    headers = {}
+    key = (bridge.get("api_key") or "").strip()
+    if key:
+        headers["Authorization"] = "Bearer " + key
+    try:
+        r = httpx.get(url, headers=headers, timeout=8)
+        if r.status_code == 200:
+            return True, ""
+        return False, f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, str(e)[:120]
+
+
 def run_local_llm(bridge: dict, prompt: str, model=None, max_tokens: int = 1024) -> str:
     """
     Chiama un endpoint OpenAI-compatibile: locale (Ollama :11434 / LM Studio :1234),

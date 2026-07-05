@@ -140,13 +140,30 @@ class BridgeLoop:
             pass
 
     def _run(self):
-        from . import llm_bridge
+        from . import llm_bridge, remote
+        last_report = 0.0
         while not self._stop.is_set():
             conf = cfg.load_config()
             br = conf.get("llm_bridge", {}) or {}
-            if not br.get("enabled"):
-                self._stop.wait(15)   # spento: ricontrolla la config ogni tanto
+            enabled = bool(br.get("enabled"))
+
+            # Report periodico dello stato del ponte (~30s): abilitato + raggiungibile.
+            now = time.monotonic()
+            if now - last_report >= 30:
+                last_report = now
+                try:
+                    if enabled:
+                        ok, detail = llm_bridge.check_llm(br)
+                    else:
+                        ok, detail = False, ""
+                    remote.report_bridge(conf, enabled, ok, br.get("endpoint", ""), detail)
+                except Exception as e:
+                    log.debug("report ponte fallito: %s", e)
+
+            if not enabled:
+                self._stop.wait(10)   # spento: ricontrolla la config ogni tanto
                 continue
+
             worked = False
             try:
                 worked = llm_bridge.poll_and_run_once(conf)

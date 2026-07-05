@@ -14,12 +14,12 @@ from . import config as cfg
 
 log = logging.getLogger("hal_agent.configui")
 
-# Preset pronti: locale, tunnel/custom e provider remoti OpenAI-compatibili.
+# Preset pronti: LLM locale o locale esposto via tunnel (URL remoto).
+# I provider cloud (Anthropic/Gemini/DeepSeek) si configurano sul SaaS, non qui.
 PRESETS = {
-    "LM Studio (locale)":      {"provider": "lmstudio", "endpoint": "http://localhost:1234",   "model": "local-model", "needs_key": False},
-    "Ollama (locale)":         {"provider": "ollama",   "endpoint": "http://localhost:11434",  "model": "llama3",      "needs_key": False},
-    "DeepSeek (remoto)":       {"provider": "deepseek", "endpoint": "https://api.deepseek.com", "model": "deepseek-chat","needs_key": True},
-    "Tunnel / Personalizzato": {"provider": "custom",   "endpoint": "",                        "model": "",            "needs_key": False},
+    "LM Studio (locale)":      {"provider": "lmstudio", "endpoint": "http://localhost:1234",  "model": "local-model"},
+    "Ollama (locale)":         {"provider": "ollama",   "endpoint": "http://localhost:11434", "model": "llama3"},
+    "Tunnel / Personalizzato": {"provider": "custom",   "endpoint": "",                       "model": ""},
 }
 
 
@@ -79,9 +79,10 @@ def open_config_window():
     ttk.Entry(frm, textvariable=v_key, width=34, show="*").grid(column=1, row=4, sticky="we", pady=3)
 
     hint = ttk.Label(frm, foreground="#888", wraplength=320, justify="left",
-                     text="Funziona con endpoint OpenAI-compatibili: LLM locale, "
-                          "LLM locale esposto via tunnel (URL remoto), o provider "
-                          "remoti come DeepSeek (richiedono API key e modello).")
+                     text="Per LLM locali (LM Studio/Ollama) o un LLM locale esposto "
+                          "via tunnel (URL remoto + eventuale API key). I provider "
+                          "cloud (Anthropic/Gemini/DeepSeek) si impostano sul sito, "
+                          "in Config → Chiavi AI.")
     hint.grid(column=0, row=5, columnspan=2, sticky="w", pady=(8, 12))
 
     def on_preset(*_):
