@@ -5,3 +5,7 @@ build/
 dist/
 *.spec.bak
 .DS_Store
+
+# build artifacts macOS
+*.app/
+hal_agent/HAL Agent.app/

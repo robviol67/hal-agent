@@ -11,8 +11,12 @@ DEFAULT_CONFIG = {
     "server_url": "http://localhost:8000",   # endpoint del HAL-SaaS
     "token": "",                              # token di pairing (Bearer)
     "ingest_path": "/api/agent/ingest",       # dove inviare gli item
+    "config_path": "/api/agent/config",       # da dove scaricare gli Scout (Fase 2)
+    "status_path": "/api/agent/status",       # dove inviare il progress (Fase 2)
     "interval_minutes": 60,                   # ogni quanto girare
     "days_limit": 7,                          # ignora contenuti più vecchi (0 = nessun limite)
+    # NOTA: con un SaaS accoppiato gli Scout arrivano dal server (server-authoritative);
+    # questi "agents" locali sono solo un fallback se il server è irraggiungibile.
     "agents": [
         {
             "name": "Scout AI",

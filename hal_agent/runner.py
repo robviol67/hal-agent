@@ -6,8 +6,27 @@ import threading
 from . import config as cfg
 from . import fetcher
 from . import sender
+from . import remote
 
 log = logging.getLogger("hal_agent.runner")
+
+
+def _resolve_agents(conf: dict):
+    """
+    Determina gli Scout da usare (server-authoritative, Fase 2):
+    server -> cache -> config.json locale. Ritorna (agents, days_limit, fonte).
+    """
+    remote_cfg = remote.fetch_config(conf)
+    source = "server"
+    if remote_cfg is None:
+        remote_cfg = remote.load_cached_config()
+        source = "cache"
+    if remote_cfg is not None and isinstance(remote_cfg.get("agents"), list):
+        return (remote_cfg["agents"],
+                int(remote_cfg.get("days_limit", conf.get("days_limit", 0)) or 0),
+                source)
+    # nessun server né cache: fallback al config locale
+    return conf.get("agents", []), int(conf.get("days_limit", 0) or 0), "local"
 
 
 def run_once(dry_run: bool = False, on_progress=None) -> dict:
@@ -16,12 +35,20 @@ def run_once(dry_run: bool = False, on_progress=None) -> dict:
     state = cfg.load_state()
     all_new, all_raw = [], 0
 
-    agents = conf.get("agents", [])
+    def status(msg):
+        if on_progress:
+            on_progress(msg)
+        if not dry_run:
+            remote.send_status(conf, msg)
+
+    agents, days_limit, source = _resolve_agents(conf)
+    status(f"Raccolta avviata: {len(agents)} scout (config: {source})")
+
     for ai, agent in enumerate(agents):
-        def prog(idx, total, kind, target):
-            if on_progress:
-                on_progress(f"{agent.get('name','')}: {kind} {idx+1}/{total}")
-        items = fetcher.run_agent(agent, days_limit=conf.get("days_limit", 0), progress=prog)
+        def prog(idx, total, kind, target, _a=agent):
+            status(f"{_a.get('name','')}: {kind} {idx+1}/{total}")
+        dl = int(agent.get("days_limit", days_limit) or 0)
+        items = fetcher.run_agent(agent, days_limit=dl, progress=prog)
         all_raw += len(items)
         new = sender.filter_new(items, state)
         all_new.extend(new)
@@ -36,6 +63,8 @@ def run_once(dry_run: bool = False, on_progress=None) -> dict:
     else:
         result["ok"] = True
         result["sent"] = 0
+    status("Fatto: %d raccolti, %d nuovi, %d inviati" %
+           (all_raw, len(all_new), result.get("sent", 0)))
     log.info("Giro completato: %d raccolti, %d nuovi, %d inviati",
              all_raw, len(all_new), result.get("sent", 0))
     return result
