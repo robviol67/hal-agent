@@ -29,7 +29,19 @@ HEADERS = {
 def fetch_rss(feed_url: str, keywords: list, limit: int = 20) -> list:
     items = []
     try:
-        feed = feedparser.parse(feed_url, request_headers=HEADERS)
+        # Scarichiamo NOI il feed con httpx invece di lasciar fare a feedparser.
+        # feedparser userebbe urllib, che nell'app impacchettata (PyInstaller) non
+        # trova i certificati CA: ogni feed falliva la verifica SSL e tornava vuoto
+        # SENZA sollevare eccezioni (bozo) — raccolta a zero, in silenzio.
+        # httpx porta con sé i propri certificati e solleva errori veri.
+        resp = httpx.get(feed_url, headers=HEADERS, timeout=20, follow_redirects=True)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
+        if feed.get("bozo") and not feed.entries:
+            log.warning("Feed illeggibile %s: %s", feed_url, feed.get("bozo_exception"))
+            return items
+        if not feed.entries:
+            log.info("Feed senza elementi: %s", feed_url)
         kw = [k.lower() for k in keywords]
         for entry in feed.entries[:limit]:
             title = (entry.get("title") or "").strip()
