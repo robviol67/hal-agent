@@ -24,6 +24,16 @@ HEADERS = {
                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+# Fonti che hanno fallito durante l'ultimo run_agent: [(indirizzo, motivo), …].
+# Prima finivano solo nel log e lo Scout sembrava semplicemente "vuoto"; così
+# invece il Pannello può dire QUALE fonte non risponde e perché.
+_ERRORS = []
+
+
+def _note_error(target: str, msg) -> None:
+    # solo la prima riga: httpx allega un pistolotto multiriga con link ai docs
+    _ERRORS.append((str(target), str(msg).splitlines()[0][:160] if str(msg).strip() else "errore"))
+
 
 # ─── RSS / Atom (copre anche Substack e i canali YouTube) ───────────────────
 def fetch_rss(feed_url: str, keywords: list, limit: int = 20) -> list:
@@ -39,6 +49,7 @@ def fetch_rss(feed_url: str, keywords: list, limit: int = 20) -> list:
         feed = feedparser.parse(resp.content)
         if feed.get("bozo") and not feed.entries:
             log.warning("Feed illeggibile %s: %s", feed_url, feed.get("bozo_exception"))
+            _note_error(feed_url, "feed illeggibile: %s" % feed.get("bozo_exception"))
             return items
         if not feed.entries:
             log.info("Feed senza elementi: %s", feed_url)
@@ -68,6 +79,7 @@ def fetch_rss(feed_url: str, keywords: list, limit: int = 20) -> list:
             })
     except Exception as e:
         log.warning("RSS error %s: %s", feed_url, e)
+        _note_error(feed_url, e)
     return items
 
 
@@ -83,7 +95,12 @@ def _detect_source(url: str) -> str:
 
 # ─── Reddit (via RSS pubblico) ──────────────────────────────────────────────
 def fetch_reddit(subreddit: str, keywords: list, limit: int = 20) -> list:
-    url = f"https://www.reddit.com/r/{subreddit}/new.rss?limit={limit}"
+    # Accetta "python", "r/python" e "/r/python": scritto com'è, "r/python"
+    # diventava ".../r/r/python/..." → 404 silenzioso.
+    name = str(subreddit).strip().strip("/")
+    if name.lower().startswith("r/"):
+        name = name[2:]
+    url = f"https://www.reddit.com/r/{name}/new.rss?limit={limit}"
     items = fetch_rss(url, keywords, limit)
     for it in items:
         it["source"] = "reddit"
@@ -119,6 +136,7 @@ def fetch_youtube_channel(channel_input: str, keywords: list, days_limit: int = 
         cid = _resolve_youtube_channel(channel_input)
     except ValueError as e:
         log.warning("%s", e)
+        _note_error(channel_input, e)
         return []
     raw = fetch_rss(f"https://www.youtube.com/feeds/videos.xml?channel_id={cid}", keywords, limit)
     if days_limit > 0:
@@ -168,10 +186,14 @@ def _clean(text: str, max_len: int = 500) -> str:
 
 
 # ─── Esecuzione di un agente ────────────────────────────────────────────────
-def run_agent(agent: dict, days_limit: int = 0, progress=None) -> list:
-    """Esegue il fetch per un agente (dict con keywords/rss_feeds/reddit_subreddits/youtube_channels)."""
+def run_agent(agent: dict, days_limit: int = 0, progress=None, errors=None) -> list:
+    """
+    Esegue il fetch per un agente (dict con keywords/rss_feeds/reddit_subreddits/youtube_channels).
+    Se `errors` è una lista, ci finiscono le fonti che hanno fallito: [(indirizzo, motivo), …].
+    """
     keywords = agent.get("keywords", [])
     results = []
+    del _ERRORS[:]
     tasks = ([("rss", u) for u in agent.get("rss_feeds", [])]
              + [("reddit", s) for s in agent.get("reddit_subreddits", [])]
              + [("youtube", c) for c in agent.get("youtube_channels", [])])
@@ -190,4 +212,6 @@ def run_agent(agent: dict, days_limit: int = 0, progress=None) -> list:
         for it in items:
             it["agent"] = agent.get("name", "")
         results.extend(items)
+    if errors is not None:
+        errors.extend(_ERRORS)
     return results

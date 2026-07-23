@@ -46,6 +46,36 @@ def fetch_config(conf: dict):
     return None
 
 
+def probe(conf: dict):
+    """
+    Prova l'accoppiamento col SaaS: chiama config_path e dice com'è andata.
+    Ritorna (ok: bool, messaggio: str, n_scout: int). Usato dal Pannello.
+    """
+    if not (conf.get("server_url") or "").strip():
+        return False, "Manca l'indirizzo del server.", 0
+    if not (conf.get("token") or "").strip():
+        return False, "Manca il token di accoppiamento.", 0
+    server = conf["server_url"].rstrip("/")
+    path = conf.get("config_path", "/api/agent/config")
+    try:
+        r = httpx.get(server + path, headers=_headers(conf), timeout=20)
+    except Exception as e:
+        return False, "Server non raggiungibile: %s" % str(e)[:160], 0
+    if r.status_code in (401, 403):
+        return False, "Token rifiutato dal server (HTTP %d)." % r.status_code, 0
+    if r.status_code >= 400:
+        return False, "HTTP %d — %s" % (r.status_code, r.text[:160]), 0
+    try:
+        data = r.json()
+        agents = data.get("agents")
+    except Exception:
+        return False, "Risposta non in formato JSON.", 0
+    if not isinstance(agents, list):
+        return False, "Il server non ha restituito l'elenco degli Scout.", 0
+    _cache_config(data)
+    return True, "Collegato: %d Scout assegnati a questo agente." % len(agents), len(agents)
+
+
 def _cache_config(data: dict) -> None:
     try:
         cfg.CONFIG_DIR.mkdir(parents=True, exist_ok=True)

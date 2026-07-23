@@ -4,15 +4,14 @@ Gira in un PROPRIO processo (comando `configui`) per non entrare in conflitto
 con il run-loop della menu-bar. Scrive su ~/.hal-agent/config.json; l'agente
 rilegge la config a ogni giro, quindi le modifiche si applicano da sole.
 """
-import json
 import logging
 import os
 import subprocess
 import sys
 import threading
-import urllib.error
-import urllib.request
 import webbrowser
+
+import httpx
 
 from . import config as cfg
 
@@ -30,18 +29,21 @@ PRESETS = {
 def fetch_models(endpoint: str, api_key: str = ""):
     """
     Elenca i modelli disponibili sull'endpoint OpenAI-compatibile (GET /v1/models).
-    Ritorna (lista_id, errore). Usa urllib (stdlib) per non dipendere da altro.
+    Ritorna (lista_id, errore).
+
+    Usa httpx e non urllib: nell'app impacchettata urllib non trova i certificati
+    CA, quindi ogni endpoint https (es. un tunnel) fallirebbe — stesso inganno
+    già visto sui feed RSS.
     """
     endpoint = (endpoint or "").rstrip("/")
     if not endpoint:
         return [], "Inserisci prima l'endpoint."
     url = endpoint + ("/models" if endpoint.endswith("/v1") else "/v1/models")
-    req = urllib.request.Request(url)
-    if api_key:
-        req.add_header("Authorization", "Bearer " + api_key)
+    headers = {"Authorization": "Bearer " + api_key} if api_key else {}
     try:
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read().decode("utf-8"))
+        r = httpx.get(url, headers=headers, timeout=8)
+        r.raise_for_status()
+        data = r.json()
         ids = [m.get("id") for m in data.get("data", []) if isinstance(m, dict) and m.get("id")]
         return ids, ("" if ids else "Nessun modello riportato dall'endpoint.")
     except Exception as e:
@@ -63,22 +65,17 @@ def test_generation(endpoint: str, model: str, api_key: str = ""):
         "max_tokens": 16,
         "stream": False,
     }
-    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"),
-                                headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
     if api_key:
-        req.add_header("Authorization", "Bearer " + api_key)
+        headers["Authorization"] = "Bearer " + api_key
     try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            d = json.loads(r.read().decode("utf-8"))
+        r = httpx.post(url, json=body, headers=headers, timeout=90)
+        if r.status_code >= 400:
+            return False, "HTTP %s — %s" % (r.status_code, r.text[:200])
+        d = r.json()
         choices = d.get("choices") or [{}]
         txt = ((choices[0].get("message") or {}).get("content") or "").strip()
         return True, (txt or "(risposta vuota)")
-    except urllib.error.HTTPError as e:
-        try:
-            detail = e.read().decode("utf-8")[:200]
-        except Exception:
-            detail = str(e)
-        return False, "HTTP %s — %s" % (e.code, detail)
     except Exception as e:
         return False, str(e)[:200]
 

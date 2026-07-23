@@ -13,6 +13,7 @@ import logging
 import httpx
 
 from . import config as cfg
+from . import telemetry
 
 log = logging.getLogger("hal_agent.llm")
 
@@ -42,6 +43,7 @@ def poll_and_run_once(conf: dict) -> bool:
         return False
 
     text = run_local_llm(br, job.get("prompt", ""), job.get("model"), job.get("max_tokens", 1024))
+    detail = "" if text else "l'LLM locale non ha risposto"
     try:
         httpx.post(server + br.get("result_path", "/api/agent/jobs/result"),
                    headers=_headers(conf),
@@ -49,6 +51,8 @@ def poll_and_run_once(conf: dict) -> bool:
         log.info("Job %s eseguito e restituito", job.get("id"))
     except Exception as e:
         log.error("Invio risultato job fallito: %s", e)
+        detail = "risultato non consegnato: %s" % str(e)[:120]
+    telemetry.record_bridge_job(job.get("id"), bool(text) and not detail, len(text or ""), detail)
     return True
 
 

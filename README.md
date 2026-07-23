@@ -31,8 +31,24 @@ python -m hal_agent run              # loop periodico (ogni interval_minutes)
 python -m hal_agent run --once       # un solo giro e invia
 python -m hal_agent run --once --dry-run   # un giro, stampa senza inviare
 python -m hal_agent tray             # interfaccia barra di sistema (default se doppio-click)
+python -m hal_agent panel            # Pannello: Scout, invii, ponte LLM, collegamento
 python -m hal_agent bridge           # ponte LLM locale (Ollama/LM Studio)
 ```
+
+## Il Pannello (dalla menu-bar: «Apri pannello…», o click sullo stato)
+Finestra unica per capire cosa sta facendo l'agente, senza aprire il JSON:
+
+| Scheda | Cosa mostra |
+|---|---|
+| **Scout collegati** | gli Scout scaricati dal sito, quante fonti hanno, raccolti/nuovi/inviati dell'ultimo giro, totale inviati, ultimo invio. Selezionando uno Scout: parole chiave, elenco fonti e **quali fonti non hanno risposto e perché** |
+| **Invii recenti** | ultimi 30 giri con esito (inviati / niente di nuovo / invio fallito) e, per ogni giro, il dettaglio per Scout |
+| **Ponte LLM** | a cosa serve, stato reale (acceso/spento, modello raggiungibile, lavori eseguiti) e la sua configurazione |
+| **Collegamento** | indirizzo del sito, token, frequenza, limite giorni + «Prova il collegamento» |
+
+Il pannello gira in un processo separato (Tk vuole il suo main-loop) e parla con
+l'agente tramite i file in `~/.hal-agent/`:
+`runtime.json` (diario: stato, storico giri, contatori per Scout, ponte) scritto dal
+runner, `trigger` scritto dal pannello per chiedere una raccolta immediata.
 
 ## Compilare l'eseguibile
 - **Mac** (su un Mac): `./build_mac.sh` → `dist/HAL Agent.app` (+ zip)

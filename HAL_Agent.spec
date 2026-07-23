@@ -24,7 +24,7 @@ a = Analysis(
     datas=[],
     hiddenimports=[
         'pystray._darwin' if sys.platform == 'darwin' else 'pystray._win32',
-        'tkinter', 'tkinter.ttk', 'tkinter.messagebox',   # finestra config ponte LLM
+        'tkinter', 'tkinter.ttk', 'tkinter.messagebox',   # pannello + finestra ponte LLM
     ],
     hookspath=[],
     runtime_hooks=[],

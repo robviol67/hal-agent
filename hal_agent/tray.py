@@ -91,18 +91,29 @@ def run_tray():
         cfg.save_config(c)
         ep = br.get("endpoint", "http://localhost:11434")
         icon.notify(
-            ("Ponte LLM ATTIVO → " + ep) if br["enabled"] else "Ponte LLM disattivato",
+            ("Ponte LLM ATTIVO: il sito HAL può far scrivere il modello su "
+             "questo computer (" + ep + ")") if br["enabled"]
+            else "Ponte LLM spento: il sito HAL userà solo i provider cloud.",
             "HAL Agent")
 
-    def on_configure_bridge(icon, item):
-        """Apre la finestra di configurazione in un processo separato (Tk sul suo main-loop)."""
+    def _open_ui(subcmd: str):
+        """Apre una finestra Tk in un processo separato (Tk vuole il suo main-loop)."""
         try:
             if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable, "configui"])
+                subprocess.Popen([sys.executable, subcmd])
             else:
-                subprocess.Popen([sys.executable, "-m", "hal_agent", "configui"])
+                subprocess.Popen([sys.executable, "-m", "hal_agent", subcmd])
+            return True
         except Exception as e:
-            log.error("apertura configurazione fallita: %s", e)
+            log.error("apertura finestra '%s' fallita: %s", subcmd, e)
+            return False
+
+    def on_open_panel(icon, item):
+        if not _open_ui("panel"):
+            _open_config_file()
+
+    def on_configure_bridge(icon, item):
+        if not _open_ui("configui"):
             _open_config_file()
 
     def on_run_now(icon, item):
@@ -112,7 +123,9 @@ def run_tray():
         _open_config_file()
 
     def on_status(icon, item):
-        icon.notify(status["text"], "HAL Agent")
+        # Il click sullo stato apre il pannello: lì si vedono Scout, invii e ponte.
+        if not _open_ui("panel"):
+            icon.notify(status["text"], "HAL Agent")
 
     def on_open_releases(icon, item):
         webbrowser.open(RELEASES_URL)
@@ -151,18 +164,24 @@ def run_tray():
         for mins, label in INTERVAL_CHOICES
     ])
 
+    avanzate = pystray.Menu(
+        Item("Configura solo il ponte LLM…", on_configure_bridge),
+        Item("Apri il file di configurazione (JSON)", on_open_config),
+        Item("Scarica release (GitHub)…", on_open_releases),
+    )
+
     menu = pystray.Menu(
         Item(f"HAL Agent v{__version__}", lambda icon, item: None, enabled=False),
         pystray.Menu.SEPARATOR,
         Item(lambda item: f"Stato: {status['text']}", on_status),
-        Item("Esegui ora", on_run_now),
+        Item("Apri pannello…", on_open_panel, default=True),
+        Item("Raccogli ora", on_run_now),
         Item("Frequenza raccolta", freq_menu),
-        Item("Ponte LLM attivo", on_toggle_bridge, checked=lambda item: _bridge_enabled()),
-        Item("Configura ponte LLM…", on_configure_bridge),
+        Item("Ponte LLM (modello locale)", on_toggle_bridge,
+             checked=lambda item: _bridge_enabled()),
         pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
-        Item("Scarica release (GitHub)…", on_open_releases),
-        Item("Apri configurazione", on_open_config),
+        Item("Avanzate", avanzate),
         pystray.Menu.SEPARATOR,
         Item("Esci", on_quit),
     )
