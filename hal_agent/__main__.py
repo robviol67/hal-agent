@@ -6,6 +6,7 @@ Uso:
   python -m hal_agent panel                                     pannello (Scout, invii, ponte, config)
   python -m hal_agent config                                    stampa il percorso del config
   python -m hal_agent bridge [--once]                           ponte LLM locale (polling job)
+  python -m hal_agent library [--once] [--dry-run]              cartella osservata → Frontiera HAL
 """
 import argparse
 import logging
@@ -43,6 +44,10 @@ def main(argv=None):
 
     pb = sub.add_parser("bridge", help="Ponte LLM locale (Ollama/LM Studio)")
     pb.add_argument("--once", action="store_true")
+
+    pl = sub.add_parser("library", help="Cartella osservata → Frontiera HAL")
+    pl.add_argument("--once", action="store_true", help="Una scansione poi esci")
+    pl.add_argument("--dry-run", action="store_true", help="Elenca i nuovi senza caricarli")
 
     args = p.parse_args(argv)
     _setup_logging(args.verbose)
@@ -93,6 +98,25 @@ def main(argv=None):
                     time.sleep(5)
             except KeyboardInterrupt:
                 return 0
+
+    if args.cmd == "library":
+        from . import library
+        res = library.scan_once(
+            dry_run=args.dry_run,
+            on_progress=lambda s: logging.getLogger("hal_agent").info(s))
+        print(f"\n→ scansionati {res.get('scanned',0)}, nuovi {res.get('new',0)}, "
+              f"inviati {res.get('uploaded',0)}, già presenti {res.get('duplicate',0)}, "
+              f"errori {res.get('error',0)}")
+        if not args.once:
+            # senza --once resta in ascolto ripetendo a intervallo (loop bloccante)
+            lp = runner.LibraryLoop(on_status=lambda s: logging.getLogger("hal_agent").info(s))
+            lp.start()
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                lp.stop()
+        return 0 if res.get("ok") else 1
 
     if args.cmd == "tray" or args.cmd is None:
         from . import tray

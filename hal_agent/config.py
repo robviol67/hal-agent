@@ -34,6 +34,18 @@ DEFAULT_CONFIG = {
         "api_key": "",                        # per provider remoti (es. DeepSeek) o tunnel protetti
         "poll_path": "/api/agent/jobs",       # da dove prelevare i job del SaaS
         "result_path": "/api/agent/jobs/result"
+    },
+    # Capability «Libreria»: osserva una cartella locale e "spara" i libri nuovi
+    # nella Frontiera di HAL (POST /api/agent/upload). Restano lì, inerti, finché
+    # non vengono presentati all'identificazione dal sito. Ricaricare la cartella
+    # è sicuro: il server deduplica per hash e l'agente controlla prima cosa è già noto.
+    "library": {
+        "enabled": False,                     # spento di default: si attiva dal menu-bar
+        "folder": str(Path.home() / "HAL" / "Libri"),  # cartella osservata
+        "upload_path": "/api/agent/upload",   # endpoint della Frontiera (upload + check)
+        "interval_minutes": 10,               # ogni quanto ri-scansiona la cartella
+        "max_mb": 48,                         # limite per file (v1; il server rifiuta oltre ~48MB)
+        "exts": ["epub", "pdf", "mobi", "azw3", "fb2", "djvu", "cbz", "cbr", "txt", "docx"]
     }
 }
 

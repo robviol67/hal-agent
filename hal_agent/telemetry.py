@@ -119,6 +119,15 @@ def record_bridge_job(job_id, ok: bool, chars: int, detail: str = "") -> None:
     update(apply)
 
 
+def record_library(run: dict) -> None:
+    """Ultimo giro della cartella osservata (Libreria) + contatore cumulativo inviati."""
+    def apply(d):
+        lib = d.setdefault("library", {})
+        lib["last"] = {**run, "ts": time.time()}
+        lib["total_uploaded"] = int(lib.get("total_uploaded", 0)) + int(run.get("uploaded", 0))
+    update(apply)
+
+
 # ─── raccolta manuale richiesta dal pannello ────────────────────────────────
 def request_run() -> None:
     """Il pannello chiede al processo menu-bar di fare subito un giro."""

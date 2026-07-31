@@ -176,6 +176,85 @@ class Loop:
         self._stop.set()
 
 
+class LibraryLoop:
+    """
+    Loop della cartella osservata (capability «Libreria»): se library.enabled è
+    true in config, ogni library.interval_minutes ri-scansiona la cartella e versa
+    i libri nuovi nella Frontiera di HAL. Rilegge la config a ogni giro, così si
+    attiva/spegne senza riavviare l'app. trigger_now() forza una scansione subito.
+    """
+    def __init__(self, on_status=None):
+        self._stop = threading.Event()
+        self._thread = None
+        self._trigger = threading.Event()
+        self.on_status = on_status or (lambda s: None)
+
+    def _status(self, msg):
+        try:
+            self.on_status(msg)
+        except Exception:
+            pass
+        telemetry.set_status(msg)
+
+    def _scan(self, conf):
+        from . import library
+        # lo stato locale (menu-bar/pannello) si aggiorna a ogni messaggio; quello
+        # verso il server è limitato nel tempo (una libreria grande = migliaia di
+        # file: non vogliamo migliaia di POST /status).
+        last_remote = [0.0]
+        def prog(m):
+            self._status(m)
+            now = time.monotonic()
+            if now - last_remote[0] >= 20:
+                last_remote[0] = now
+                remote.send_status(conf, m)
+        res = library.scan_once(conf, on_progress=prog)
+        remote.send_status(conf, f"Libreria: {res.get('uploaded',0)} inviati, {res.get('duplicate',0)} già presenti")
+        try:
+            telemetry.record_library(res)
+        except Exception:
+            pass
+        return res
+
+    def _run(self):
+        last_scan = 0.0
+        while not self._stop.is_set():
+            conf = cfg.load_config()
+            lib = conf.get("library", {}) or {}
+            enabled = bool(lib.get("enabled"))
+            interval = max(1, int(lib.get("interval_minutes", 10))) * 60
+            now = time.monotonic()
+
+            forced = self._trigger.is_set()
+            if forced:
+                self._trigger.clear()
+
+            # auto solo se abilitato; una scansione forzata dal menu gira comunque
+            if forced or (enabled and now - last_scan >= interval):
+                last_scan = now
+                try:
+                    self._scan(conf)
+                except Exception as e:
+                    log.error("Libreria: giro fallito: %s", e)
+                    self._status(f"Libreria: errore {e}")
+            # attesa breve e interrompibile: reagisce a stop/trigger senza ritardo
+            self._stop.wait(5)
+
+    def trigger_now(self):
+        """Chiede una scansione immediata (indipendente dall'intervallo)."""
+        self._trigger.set()
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+
 class BridgeLoop:
     """
     Loop del ponte LLM: se llm_bridge.enabled è true in config, interroga il

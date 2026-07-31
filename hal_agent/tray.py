@@ -7,7 +7,7 @@ import webbrowser
 
 from . import config as cfg
 from . import __version__
-from .runner import Loop, BridgeLoop
+from .runner import Loop, BridgeLoop, LibraryLoop
 
 log = logging.getLogger("hal_agent.tray")
 
@@ -80,9 +80,32 @@ def run_tray():
     status = {"text": "In avvio…"}
     loop = Loop(on_status=lambda s: status.__setitem__("text", s))
     bridge = BridgeLoop(on_status=lambda s: status.__setitem__("text", s))
+    library = LibraryLoop(on_status=lambda s: status.__setitem__("text", s))
 
     def _bridge_enabled():
         return bool((cfg.load_config().get("llm_bridge") or {}).get("enabled"))
+
+    def _library_enabled():
+        return bool((cfg.load_config().get("library") or {}).get("enabled"))
+
+    def on_toggle_library(icon, item):
+        c = cfg.load_config()
+        lib = c.setdefault("library", {})
+        lib["enabled"] = not bool(lib.get("enabled"))
+        cfg.save_config(c)
+        folder = lib.get("folder", "")
+        if lib["enabled"]:
+            icon.notify(f"Libreria ATTIVA: verso i libri nuovi da «{folder}» alla Frontiera di HAL.", "HAL Agent")
+            library.trigger_now()   # prima scansione subito
+        else:
+            icon.notify("Libreria spenta: la cartella osservata non viene più letta.", "HAL Agent")
+
+    def on_scan_library(icon, item):
+        if not (cfg.load_config().get("token")):
+            icon.notify("Configura prima il collegamento (server + token).", "HAL Agent")
+            return
+        library.trigger_now()
+        icon.notify("Libreria: scansione della cartella avviata.", "HAL Agent")
 
     def on_toggle_bridge(icon, item):
         c = cfg.load_config()
@@ -156,6 +179,7 @@ def run_tray():
     def on_quit(icon, item):
         loop.stop()
         bridge.stop()
+        library.stop()
         icon.stop()
 
     freq_menu = pystray.Menu(*[
@@ -180,6 +204,10 @@ def run_tray():
         Item("Ponte LLM (modello locale)", on_toggle_bridge,
              checked=lambda item: _bridge_enabled()),
         pystray.Menu.SEPARATOR,
+        Item("Libreria (cartella osservata)", on_toggle_library,
+             checked=lambda item: _library_enabled()),
+        Item("Scansiona la cartella ora", on_scan_library),
+        pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
         Item("Avanzate", avanzate),
         pystray.Menu.SEPARATOR,
@@ -190,4 +218,5 @@ def run_tray():
 
     loop.start()
     bridge.start()
+    library.start()
     icon.run()
