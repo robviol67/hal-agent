@@ -41,6 +41,7 @@ def main(argv=None):
     sub.add_parser("panel", help="Pannello: Scout collegati, invii, ponte LLM, impostazioni")
     sub.add_parser("config", help="Percorso del file di configurazione")
     sub.add_parser("configui", help="Finestra di configurazione del Ponte LLM")
+    sub.add_parser("pickfolder", help="Scegli la cartella osservata (finestra di sistema)")
 
     pb = sub.add_parser("bridge", help="Ponte LLM locale (Ollama/LM Studio)")
     pb.add_argument("--once", action="store_true")
@@ -65,6 +66,11 @@ def main(argv=None):
     if args.cmd == "panel":
         from . import panel_window
         panel_window.open_panel()
+        return 0
+
+    if args.cmd == "pickfolder":
+        from . import folder_picker
+        folder_picker.open_folder_picker()
         return 0
 
     if args.cmd == "run":

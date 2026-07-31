@@ -88,6 +88,21 @@ def run_tray():
     def _library_enabled():
         return bool((cfg.load_config().get("library") or {}).get("enabled"))
 
+    def _library_folder_label():
+        folder = str((cfg.load_config().get("library") or {}).get("folder") or "")
+        if not folder:
+            return "Cartella: (non impostata)"
+        home = os.path.expanduser("~")
+        if folder.startswith(home):
+            folder = "~" + folder[len(home):]
+        if len(folder) > 40:
+            folder = "…" + folder[-39:]
+        return "Cartella: " + folder
+
+    def on_pick_folder(icon, item):
+        if not _open_ui("pickfolder"):
+            _open_config_file()
+
     def on_toggle_library(icon, item):
         c = cfg.load_config()
         lib = c.setdefault("library", {})
@@ -206,6 +221,8 @@ def run_tray():
         pystray.Menu.SEPARATOR,
         Item("Libreria (cartella osservata)", on_toggle_library,
              checked=lambda item: _library_enabled()),
+        Item(lambda item: _library_folder_label(), on_pick_folder),
+        Item("Scegli la cartella osservata…", on_pick_folder),
         Item("Scansiona la cartella ora", on_scan_library),
         pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
