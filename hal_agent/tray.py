@@ -110,7 +110,9 @@ def run_tray():
         cfg.save_config(c)
         folder = lib.get("folder", "")
         if lib["enabled"]:
-            icon.notify(f"Libreria ATTIVA: verso i libri nuovi da «{folder}» alla Frontiera di HAL.", "HAL Agent")
+            icon.notify(f"Libreria ATTIVA: i libri nuovi in «{folder}» vengono rinominati "
+                        "(Titolo-autore-genere-anno), inviati alla Frontiera di HAL e spostati in inviati/.",
+                        "HAL Agent")
             library.trigger_now()   # prima scansione subito
         else:
             icon.notify("Libreria spenta: la cartella osservata non viene più letta.", "HAL Agent")

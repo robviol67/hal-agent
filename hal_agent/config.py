@@ -45,6 +45,9 @@ DEFAULT_CONFIG = {
         "upload_path": "/api/agent/upload",   # endpoint della Frontiera (upload + check)
         "interval_minutes": 10,               # ogni quanto ri-scansiona la cartella
         "max_mb": 48,                         # limite per file (v1; il server rifiuta oltre ~48MB)
+        "rename": True,                       # rinomina in «Titolo-autore-genere-anno.ext» prima dell'invio
+        "move_sent": True,                    # dopo l'invio sposta il file in sotto-cartella inviati/
+        "sent_subdir": "inviati",             # nome della sotto-cartella degli inviati
         "exts": ["epub", "pdf", "mobi", "azw3", "fb2", "djvu", "cbz", "cbr", "txt", "docx"]
     }
 }
