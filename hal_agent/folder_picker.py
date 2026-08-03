@@ -1,9 +1,10 @@
-"""Selettore nativo della «cartella osservata» (capability Libreria).
+"""Selettore nativo della «cartella osservata» (capability Libreria e Documenti).
 
 Apre una finestra di scelta cartella del sistema (Tk askdirectory) e salva il
-percorso in config.library.folder — così l'utente non deve editare il JSON a mano.
-Gira in un PROCESSO SEPARATO (comando `pickfolder`): Tk vuole il suo main-loop,
-come già per `panel`/`configui`.
+percorso in config.library.folder oppure config.documents.folder — così l'utente
+non deve editare il JSON a mano. Gira in un PROCESSO SEPARATO (comando
+`pickfolder [--documents]`): Tk vuole il suo main-loop, come già per
+`panel`/`configui`.
 """
 import logging
 import os
@@ -12,10 +13,25 @@ from . import config as cfg
 
 log = logging.getLogger("hal_agent.folder_picker")
 
+# testi per sezione: («chiave config», titolo del dialog, spiegazione finale)
+_SECTIONS = {
+    "library": (
+        "Scegli la cartella dei libri da osservare",
+        "La Libreria è attiva: userà «Scansiona ora» o il prossimo giro automatico.",
+    ),
+    "documents": (
+        "Scegli la cartella dei documenti da osservare",
+        "I Documenti sono attivi: i file nuovi verranno convertiti in Markdown e "
+        "inviati all'Archivio. Gli originali restano dove sono.",
+    ),
+}
 
-def open_folder_picker() -> None:
+
+def open_folder_picker(section: str = "library") -> None:
     import tkinter as tk
     from tkinter import filedialog, messagebox
+
+    title, note = _SECTIONS.get(section, _SECTIONS["library"])
 
     root = tk.Tk()
     root.withdraw()
@@ -25,27 +41,26 @@ def open_folder_picker() -> None:
         pass
 
     c = cfg.load_config()
-    lib = c.setdefault("library", {})
-    current = str(lib.get("folder") or "")
+    sec = c.setdefault(section, {})
+    current = str(sec.get("folder") or "")
     initial = current if (current and os.path.isdir(current)) else os.path.expanduser("~")
 
     folder = filedialog.askdirectory(
-        title="Scegli la cartella dei libri da osservare",
+        title=title,
         initialdir=initial,
         mustexist=True,
     )
 
     if folder:
-        lib["folder"] = folder
-        # se la cartella viene scelta, ha senso che la Libreria sia attiva
-        lib["enabled"] = True
+        sec["folder"] = folder
+        # se la cartella viene scelta, ha senso che la capability sia attiva
+        sec["enabled"] = True
         cfg.save_config(c)
-        log.info("Cartella osservata impostata: %s", folder)
+        log.info("Cartella osservata (%s) impostata: %s", section, folder)
         try:
             messagebox.showinfo(
                 "HAL Agent",
-                "Cartella osservata impostata:\n" + folder +
-                "\n\nLa Libreria è attiva: userà «Scansiona ora» o il prossimo giro automatico.",
+                "Cartella osservata impostata:\n" + folder + "\n\n" + note,
             )
         except Exception:
             pass

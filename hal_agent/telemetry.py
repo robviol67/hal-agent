@@ -128,6 +128,17 @@ def record_library(run: dict) -> None:
     update(apply)
 
 
+def record_documents(run: dict) -> None:
+    """Ultimo giro della cartella osservata dei Documenti + contatori cumulativi
+    (inviati e convertiti in Markdown)."""
+    def apply(d):
+        doc = d.setdefault("documents", {})
+        doc["last"] = {**run, "ts": time.time()}
+        doc["total_uploaded"] = int(doc.get("total_uploaded", 0)) + int(run.get("uploaded", 0))
+        doc["total_converted"] = int(doc.get("total_converted", 0)) + int(run.get("converted", 0))
+    update(apply)
+
+
 # ─── raccolta manuale richiesta dal pannello ────────────────────────────────
 def request_run() -> None:
     """Il pannello chiede al processo menu-bar di fare subito un giro."""

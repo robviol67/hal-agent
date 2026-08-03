@@ -7,6 +7,7 @@ Uso:
   python -m hal_agent config                                    stampa il percorso del config
   python -m hal_agent bridge [--once]                           ponte LLM locale (polling job)
   python -m hal_agent library [--once] [--dry-run]              cartella osservata → Frontiera HAL
+  python -m hal_agent documents [--once] [--dry-run] [--folder] cartella osservata → Archivio documenti
 """
 import argparse
 import logging
@@ -41,7 +42,9 @@ def main(argv=None):
     sub.add_parser("panel", help="Pannello: Scout collegati, invii, ponte LLM, impostazioni")
     sub.add_parser("config", help="Percorso del file di configurazione")
     sub.add_parser("configui", help="Finestra di configurazione del Ponte LLM")
-    sub.add_parser("pickfolder", help="Scegli la cartella osservata (finestra di sistema)")
+    pf = sub.add_parser("pickfolder", help="Scegli la cartella osservata (finestra di sistema)")
+    pf.add_argument("--documents", action="store_true",
+                    help="Sceglie la cartella dei Documenti invece di quella dei Libri")
 
     pb = sub.add_parser("bridge", help="Ponte LLM locale (Ollama/LM Studio)")
     pb.add_argument("--once", action="store_true")
@@ -49,6 +52,14 @@ def main(argv=None):
     pl = sub.add_parser("library", help="Cartella osservata → Frontiera HAL")
     pl.add_argument("--once", action="store_true", help="Una scansione poi esci")
     pl.add_argument("--dry-run", action="store_true", help="Elenca i nuovi senza caricarli")
+
+    pd = sub.add_parser("documents", help="Cartella osservata → Archivio documenti HAL")
+    pd.add_argument("--once", action="store_true", help="Una scansione poi esci")
+    pd.add_argument("--dry-run", action="store_true",
+                    help="Converte in Markdown e mostra cosa verrebbe inviato: niente rete, "
+                         "niente scritture (né config né stato)")
+    pd.add_argument("--folder", help="Solo per prova: cartella da usare al posto di quella "
+                                     "in configurazione (non viene salvata)")
 
     args = p.parse_args(argv)
     _setup_logging(args.verbose)
@@ -70,7 +81,7 @@ def main(argv=None):
 
     if args.cmd == "pickfolder":
         from . import folder_picker
-        folder_picker.open_folder_picker()
+        folder_picker.open_folder_picker("documents" if args.documents else "library")
         return 0
 
     if args.cmd == "run":
@@ -116,6 +127,32 @@ def main(argv=None):
         if not args.once:
             # senza --once resta in ascolto ripetendo a intervallo (loop bloccante)
             lp = runner.LibraryLoop(on_status=lambda s: logging.getLogger("hal_agent").info(s))
+            lp.start()
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                lp.stop()
+        return 0 if res.get("ok") else 1
+
+    if args.cmd == "documents":
+        from . import documents
+        conf = cfg.load_config()
+        if args.folder:
+            # override solo in memoria: la config sul disco non viene toccata
+            conf = dict(conf)
+            conf["documents"] = {**(conf.get("documents") or {}), "folder": args.folder}
+        res = documents.scan_once(
+            conf,
+            dry_run=args.dry_run,
+            on_progress=lambda s: logging.getLogger("hal_agent").info(s))
+        print(f"\n→ scansionati {res.get('scanned',0)}, nuovi {res.get('new',0)}, "
+              f"convertiti {res.get('converted',0)}, inviati {res.get('uploaded',0)}, "
+              f"già presenti {res.get('known',0) + res.get('duplicate',0)}, "
+              f"errori {res.get('error',0)}")
+        if not args.once and not args.dry_run:
+            # senza --once resta in ascolto ripetendo a intervallo (loop bloccante)
+            lp = runner.DocumentsLoop(on_status=lambda s: logging.getLogger("hal_agent").info(s))
             lp.start()
             try:
                 while True:

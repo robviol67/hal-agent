@@ -255,6 +255,86 @@ class LibraryLoop:
         self._stop.set()
 
 
+class DocumentsLoop:
+    """
+    Loop della cartella osservata dei DOCUMENTI (Archivio, coda «Da classificare»):
+    se documents.enabled è true in config, ogni documents.interval_minutes
+    ri-scansiona la cartella, converte i file nuovi in Markdown (in memoria) e li
+    carica. Rilegge la config a ogni giro, così si attiva/spegne senza riavviare
+    l'app. trigger_now() forza una scansione subito.
+    """
+    def __init__(self, on_status=None):
+        self._stop = threading.Event()
+        self._thread = None
+        self._trigger = threading.Event()
+        self.on_status = on_status or (lambda s: None)
+
+    def _status(self, msg):
+        try:
+            self.on_status(msg)
+        except Exception:
+            pass
+        telemetry.set_status(msg)
+
+    def _scan(self, conf):
+        from . import documents
+        # come per la Libreria: lo stato locale segue ogni messaggio, quello verso
+        # il server è throttlato (una cartella grande = centinaia di file).
+        last_remote = [0.0]
+        def prog(m):
+            self._status(m)
+            now = time.monotonic()
+            if now - last_remote[0] >= 20:
+                last_remote[0] = now
+                remote.send_status(conf, m)
+        res = documents.scan_once(conf, on_progress=prog)
+        remote.send_status(conf, f"Documenti: {res.get('uploaded',0)} inviati, "
+                                 f"{res.get('known',0) + res.get('duplicate',0)} già presenti")
+        try:
+            telemetry.record_documents(res)
+        except Exception:
+            pass
+        return res
+
+    def _run(self):
+        last_scan = 0.0
+        while not self._stop.is_set():
+            conf = cfg.load_config()
+            doc = conf.get("documents", {}) or {}
+            enabled = bool(doc.get("enabled"))
+            interval = max(1, int(doc.get("interval_minutes", 10))) * 60
+            now = time.monotonic()
+
+            forced = self._trigger.is_set()
+            if forced:
+                self._trigger.clear()
+
+            # auto solo se abilitato; una scansione forzata dal menu gira comunque
+            if forced or (enabled and now - last_scan >= interval):
+                last_scan = now
+                try:
+                    self._scan(conf)
+                except Exception as e:
+                    # un giro fallito non deve mai far cadere il loop
+                    log.error("Documenti: giro fallito: %s", e)
+                    self._status(f"Documenti: errore {e}")
+            self._stop.wait(5)
+
+    def trigger_now(self):
+        """Chiede una scansione immediata (indipendente dall'intervallo)."""
+        self._trigger.set()
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+
 class BridgeLoop:
     """
     Loop del ponte LLM: se llm_bridge.enabled è true in config, interroga il

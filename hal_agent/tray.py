@@ -7,7 +7,7 @@ import webbrowser
 
 from . import config as cfg
 from . import __version__
-from .runner import Loop, BridgeLoop, LibraryLoop
+from .runner import Loop, BridgeLoop, LibraryLoop, DocumentsLoop
 
 log = logging.getLogger("hal_agent.tray")
 
@@ -81,6 +81,7 @@ def run_tray():
     loop = Loop(on_status=lambda s: status.__setitem__("text", s))
     bridge = BridgeLoop(on_status=lambda s: status.__setitem__("text", s))
     library = LibraryLoop(on_status=lambda s: status.__setitem__("text", s))
+    documents = DocumentsLoop(on_status=lambda s: status.__setitem__("text", s))
 
     def _bridge_enabled():
         return bool((cfg.load_config().get("llm_bridge") or {}).get("enabled"))
@@ -88,8 +89,11 @@ def run_tray():
     def _library_enabled():
         return bool((cfg.load_config().get("library") or {}).get("enabled"))
 
-    def _library_folder_label():
-        folder = str((cfg.load_config().get("library") or {}).get("folder") or "")
+    def _documents_enabled():
+        return bool((cfg.load_config().get("documents") or {}).get("enabled"))
+
+    def _folder_label(section: str):
+        folder = str((cfg.load_config().get(section) or {}).get("folder") or "")
         if not folder:
             return "Cartella: (non impostata)"
         home = os.path.expanduser("~")
@@ -99,8 +103,18 @@ def run_tray():
             folder = "…" + folder[-39:]
         return "Cartella: " + folder
 
+    def _library_folder_label():
+        return _folder_label("library")
+
+    def _documents_folder_label():
+        return _folder_label("documents")
+
     def on_pick_folder(icon, item):
         if not _open_ui("pickfolder"):
+            _open_config_file()
+
+    def on_pick_doc_folder(icon, item):
+        if not _open_ui("pickfolder", "--documents"):
             _open_config_file()
 
     def on_toggle_library(icon, item):
@@ -124,6 +138,29 @@ def run_tray():
         library.trigger_now()
         icon.notify("Libreria: scansione della cartella avviata.", "HAL Agent")
 
+    def on_toggle_documents(icon, item):
+        c = cfg.load_config()
+        doc = c.setdefault("documents", {})
+        doc["enabled"] = not bool(doc.get("enabled"))
+        cfg.save_config(c)
+        folder = doc.get("folder", "")
+        if doc["enabled"]:
+            icon.notify(f"Documenti ATTIVI: i file nuovi in «{folder}» vengono convertiti in "
+                        "Markdown (in memoria, nessun file aggiunto) e inviati all'Archivio "
+                        "documenti di HAL, nella coda «Da classificare». Gli originali restano "
+                        "dove sono, non vengono rinominati né spostati.",
+                        "HAL Agent")
+            documents.trigger_now()   # prima scansione subito
+        else:
+            icon.notify("Documenti spenti: la cartella osservata non viene più letta.", "HAL Agent")
+
+    def on_scan_documents(icon, item):
+        if not (cfg.load_config().get("token")):
+            icon.notify("Configura prima il collegamento (server + token).", "HAL Agent")
+            return
+        documents.trigger_now()
+        icon.notify("Documenti: scansione della cartella avviata.", "HAL Agent")
+
     def on_toggle_bridge(icon, item):
         c = cfg.load_config()
         br = c.setdefault("llm_bridge", {})
@@ -136,13 +173,13 @@ def run_tray():
             else "Ponte LLM spento: il sito HAL userà solo i provider cloud.",
             "HAL Agent")
 
-    def _open_ui(subcmd: str):
+    def _open_ui(subcmd: str, *extra):
         """Apre una finestra Tk in un processo separato (Tk vuole il suo main-loop)."""
         try:
             if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable, subcmd])
+                subprocess.Popen([sys.executable, subcmd, *extra])
             else:
-                subprocess.Popen([sys.executable, "-m", "hal_agent", subcmd])
+                subprocess.Popen([sys.executable, "-m", "hal_agent", subcmd, *extra])
             return True
         except Exception as e:
             log.error("apertura finestra '%s' fallita: %s", subcmd, e)
@@ -197,6 +234,7 @@ def run_tray():
         loop.stop()
         bridge.stop()
         library.stop()
+        documents.stop()
         icon.stop()
 
     freq_menu = pystray.Menu(*[
@@ -227,6 +265,12 @@ def run_tray():
         Item("Scegli la cartella osservata…", on_pick_folder),
         Item("Scansiona la cartella ora", on_scan_library),
         pystray.Menu.SEPARATOR,
+        Item("Documenti (cartella osservata)", on_toggle_documents,
+             checked=lambda item: _documents_enabled()),
+        Item(lambda item: _documents_folder_label(), on_pick_doc_folder),
+        Item("Scegli la cartella dei documenti…", on_pick_doc_folder),
+        Item("Scansiona documenti ora", on_scan_documents),
+        pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
         Item("Avanzate", avanzate),
         pystray.Menu.SEPARATOR,
@@ -238,4 +282,5 @@ def run_tray():
     loop.start()
     bridge.start()
     library.start()
+    documents.start()
     icon.run()

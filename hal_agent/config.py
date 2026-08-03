@@ -49,6 +49,23 @@ DEFAULT_CONFIG = {
         "move_sent": True,                    # dopo l'invio sposta il file in sotto-cartella inviati/
         "sent_subdir": "inviati",             # nome della sotto-cartella degli inviati
         "exts": ["epub", "pdf", "mobi", "azw3", "fb2", "djvu", "cbz", "cbr", "txt", "docx"]
+    },
+    # Capability «Documenti»: gemella della Libreria, ma verso l'ARCHIVIO DOCUMENTI
+    # (coda «Da classificare»), non verso la Frontiera dei libri. Sono i materiali
+    # di studio e di campagna. Prima dell'invio l'agente converte il documento in
+    # Markdown IN MEMORIA (docmd.py): il .md non viene mai scritto su disco.
+    # A differenza della Libreria gli originali NON vengono rinominati né spostati:
+    # sono file di lavoro dell'utente, il dedup si regge sugli hash.
+    "documents": {
+        "enabled": False,                     # spento di default: si attiva dal menu-bar
+        "folder": str(Path.home() / "HAL" / "Documenti"),  # cartella osservata
+        "upload_path": "/api/agent/doc_upload",  # endpoint dell'Archivio (upload + check)
+        "interval_minutes": 10,               # ogni quanto ri-scansiona la cartella
+        "max_mb": 48,                         # limite per file
+        "convert_markdown": True,             # converte in Markdown (in memoria) prima dell'invio
+        "move_sent": False,                   # NON sposta gli originali (opzionale)
+        "sent_subdir": "inviati",             # sotto-cartella usata solo se move_sent è true
+        "exts": ["pdf", "docx", "rtf", "txt", "md", "pptx", "ppt", "key"]
     }
 }
 
