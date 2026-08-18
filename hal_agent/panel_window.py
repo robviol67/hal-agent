@@ -481,9 +481,15 @@ def open_panel():
             txt = ("Stato: ACCESO e funzionante\nModello raggiungibile su %s\nUltimo controllo: %s"
                    % (br.get("endpoint") or "?", _fmt_ts(br.get("checked_ts"))))
         else:
-            txt = ("Stato: ACCESO ma il modello NON risponde\n%s\n%s\nUltimo controllo: %s"
-                   % (br.get("endpoint") or "?", br.get("detail") or "",
-                      "Avvia LM Studio/Ollama o correggi l'endpoint.", _fmt_ts(br.get("checked_ts"))))
+            # (il motivo può mancare: si compone riga per riga invece di un %
+            #  con un numero di segnaposto che non torna)
+            righe = ["Stato: ACCESO ma il modello NON risponde",
+                     br.get("endpoint") or "?"]
+            if br.get("detail"):
+                righe.append(str(br["detail"]))
+            righe.append("Avvia LM Studio/Ollama o correggi l'endpoint.")
+            righe.append("Ultimo controllo: %s" % _fmt_ts(br.get("checked_ts")))
+            txt = "\n".join(righe)
         jobs = int(br.get("jobs_done", 0))
         if jobs:
             last = br.get("last_job") or {}
@@ -584,15 +590,31 @@ def open_panel():
 
     # ── aggiornamento periodico ─────────────────────────────────────────────
     def refresh():
-        data = telemetry.read()
-        st = data.get("status") or {}
-        lbl_status.config(text="Stato: %s%s" % (
-            st.get("text") or "in attesa",
-            ("  ·  %s" % _fmt_ts(st.get("ts"))) if st.get("ts") else ""))
-        lbl_next.config(text="Prossima raccolta: " + _fmt_countdown(data.get("next_run_ts")))
-        fill_scouts()
-        fill_runs()
-        refresh_bridge_state()
+        # Ogni pezzo è protetto per conto suo: se uno va storto (dato inatteso
+        # in runtime.json, sezione che non sa disegnarsi) il pannello resta
+        # aperto e mostra l'errore, invece di chiudersi in silenzio.
+        def _safe(nome, fn):
+            try:
+                fn()
+            except Exception as e:
+                log.exception("pannello: sezione '%s' non aggiornata", nome)
+                try:
+                    lbl_status.config(text="Errore nella sezione «%s»: %s" % (nome, e))
+                except Exception:
+                    pass
+
+        def _testa():
+            data = telemetry.read()
+            st = data.get("status") or {}
+            lbl_status.config(text="Stato: %s%s" % (
+                st.get("text") or "in attesa",
+                ("  ·  %s" % _fmt_ts(st.get("ts"))) if st.get("ts") else ""))
+            lbl_next.config(text="Prossima raccolta: " + _fmt_countdown(data.get("next_run_ts")))
+
+        _safe("intestazione", _testa)
+        _safe("Scout collegati", fill_scouts)
+        _safe("Invii recenti", fill_runs)
+        _safe("Ponte LLM", refresh_bridge_state)
         root.after(REFRESH_MS, refresh)
 
     refresh()

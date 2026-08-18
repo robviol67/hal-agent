@@ -3,6 +3,8 @@ import logging
 import os
 import subprocess
 import sys
+import threading
+import time
 import webbrowser
 
 from . import config as cfg
@@ -173,24 +175,62 @@ def run_tray():
             else "Ponte LLM spento: il sito HAL userà solo i provider cloud.",
             "HAL Agent")
 
-    def _open_ui(subcmd: str, *extra):
-        """Apre una finestra Tk in un processo separato (Tk vuole il suo main-loop)."""
+    def _open_ui(subcmd: str, *extra, icon=None):
+        """Apre una finestra Tk in un processo separato (Tk vuole il suo main-loop).
+
+        Se la finestra muore appena nata (finora succedeva in silenzio: sembrava
+        che il comando non facesse nulla) l'errore finisce in
+        ~/.hal-agent/finestre.log e arriva una notifica con l'ultima riga.
+        """
         try:
+            errlog = cfg.CONFIG_DIR / "finestre.log"
+            try:
+                cfg.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                err = open(errlog, "ab")
+                err.write(("\n===== %s · %s =====\n" % (subcmd, time.strftime("%Y-%m-%d %H:%M:%S"))).encode())
+                err.flush()
+            except Exception:
+                err = subprocess.DEVNULL
             if getattr(sys, "frozen", False):
-                subprocess.Popen([sys.executable, subcmd, *extra])
+                proc = subprocess.Popen([sys.executable, subcmd, *extra], stderr=err)
             else:
-                subprocess.Popen([sys.executable, "-m", "hal_agent", subcmd, *extra])
-            return True
+                proc = subprocess.Popen([sys.executable, "-m", "hal_agent", subcmd, *extra], stderr=err)
         except Exception as e:
             log.error("apertura finestra '%s' fallita: %s", subcmd, e)
             return False
 
+        def _watch():
+            """Se il processo esce subito con errore, dillo invece di tacere."""
+            for _ in range(30):                     # ~6 secondi
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.2)
+            code = proc.poll()
+            if code in (None, 0):
+                return
+            motivo = ""
+            try:
+                righe = [r.strip() for r in errlog.read_text(errors="replace").splitlines() if r.strip()]
+                if righe:
+                    motivo = righe[-1][:180]
+            except Exception:
+                pass
+            log.error("la finestra '%s' si è chiusa subito (codice %s): %s", subcmd, code, motivo)
+            if icon is not None:
+                try:
+                    icon.notify("La finestra non si è aperta. Dettagli in "
+                                "~/.hal-agent/finestre.log\n" + motivo, "HAL Agent")
+                except Exception:
+                    pass
+        threading.Thread(target=_watch, daemon=True).start()
+        return True
+
     def on_open_panel(icon, item):
-        if not _open_ui("panel"):
+        if not _open_ui("panel", icon=icon):
             _open_config_file()
 
     def on_configure_bridge(icon, item):
-        if not _open_ui("configui"):
+        if not _open_ui("configui", icon=icon):
             _open_config_file()
 
     def on_run_now(icon, item):
@@ -201,7 +241,7 @@ def run_tray():
 
     def on_status(icon, item):
         # Il click sullo stato apre il pannello: lì si vedono Scout, invii e ponte.
-        if not _open_ui("panel"):
+        if not _open_ui("panel", icon=icon):
             icon.notify(status["text"], "HAL Agent")
 
     def on_open_releases(icon, item):
