@@ -1,7 +1,7 @@
 # HAL Agent (desktop) — prototipo
 
 Raccoglitore desktop per **HAL-SaaS**. Gira su **Mac e Windows**, scrappa feed
-RSS/Substack/Reddit/YouTube (**con trascrizioni**) usando l'**IP residenziale** del PC
+RSS/Substack/Reddit/YouTube (**con trascrizioni intere**) usando l'**IP residenziale** del PC
 dell'utente e invia le novità al SaaS via API. Opzionalmente fa da **ponte verso un LLM
 locale** (Ollama / LM Studio) senza bisogno di alcun tunnel in ingresso.
 
@@ -33,7 +33,31 @@ python -m hal_agent run --once --dry-run   # un giro, stampa senza inviare
 python -m hal_agent tray             # interfaccia barra di sistema (default se doppio-click)
 python -m hal_agent panel            # Pannello: Scout, invii, ponte LLM, collegamento
 python -m hal_agent bridge           # ponte LLM locale (Ollama/LM Studio)
+python -m hal_agent transcribe       # coda trascrizioni del sito (+ sveglia Gemini)
+python -m hal_agent video --once     # elenchi di link YouTube (cartella osservata) → Feed
+python -m hal_agent transcript URL   # prova: stampa la trascrizione di un video
 ```
+
+## Trascrizioni dei video YouTube (v0.6)
+I video dei canali YouTube degli Scout arrivano nel Feed **con la trascrizione intera**
+(sottotitoli di YouTube, manuali o automatici: gratis, un secondo a video). Si decide
+per Scout, dal sito («Trascrivi i video dei canali YouTube», acceso di default).
+
+| Via | Chi lavora | Quando |
+|---|---|---|
+| **Sottotitoli** | l'agente (IP di casa) | sempre, prima |
+| **Gemini** (ascolta il video) | il server, su richiesta dell'agente | solo se i sottotitoli mancano, e solo se l'opzione è accesa in Configurazione |
+
+Oltre agli Scout:
+- **dal Feed**: bottone «Trascrivi» su qualsiasi video YouTube raccolto (va in coda, l'agente
+  la prende entro un minuto); «Trascrivi ora con Gemini» salta la coda;
+- **cartella dei video** (menu-bar → «Video»): una cartella con file `.txt`, **un link YouTube
+  per riga** (`#` = commento). Ogni link nuovo viene trascritto e mandato al Feed come
+  elemento dello Scout «Cartella video». I file non vengono modificati: si continua ad
+  aggiungere righe.
+
+Il loop «Trascrizioni per il sito» gira sempre (una GET al minuto a vuoto) e si può spegnere
+dal menu; gli Scout trascrivono comunque i propri canali durante la raccolta.
 
 ## Il Pannello (dalla menu-bar: «Apri pannello…», o click sullo stato)
 Finestra unica per capire cosa sta facendo l'agente, senza aprire il JSON:
@@ -72,6 +96,13 @@ Ponte LLM locale (opzionale):
 ```
 GET  {server_url}/api/agent/jobs          -> { "job": {id, prompt, model, max_tokens} } | { "job": null }
 POST {server_url}/api/agent/jobs/result   <- { "job_id": ..., "text": "..." }
+```
+Trascrizioni (v0.6): gli item dell'ingest possono portare `transcript` + `transcript_status`
+(done | none | error); la coda del sito:
+```
+GET  {server_url}/api/agent/transcribe?limit=5  -> { ok, jobs:[{id,url,video_id}], fallback_pending }
+POST {server_url}/api/agent/transcribe          <- { results:[{id,status,transcript,lang,detail}] }
+POST {server_url}/api/agent/transcribe          <- { fallback:1 }   -> { processed, remaining }  (Gemini, un video)
 ```
 
 ## Note firma (per evitare avvisi di sicurezza)

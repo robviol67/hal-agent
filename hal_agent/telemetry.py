@@ -139,6 +139,36 @@ def record_documents(run: dict) -> None:
     update(apply)
 
 
+def record_transcripts(run: dict) -> None:
+    """Giro della coda trascrizioni (video presi dal sito) + contatori cumulativi."""
+    def apply(d):
+        tr = d.setdefault("transcripts", {})
+        tr["last"] = {**run, "ts": time.time()}
+        tr["total_done"] = int(tr.get("total_done", 0)) + int(run.get("done", 0))
+        tr["total_none"] = int(tr.get("total_none", 0)) + int(run.get("none", 0))
+        tr["total_error"] = int(tr.get("total_error", 0)) + int(run.get("error", 0))
+    update(apply)
+
+
+def record_fallback(proc: dict) -> None:
+    """Un video trascritto (o tentato) da Gemini sul server."""
+    def apply(d):
+        tr = d.setdefault("transcripts", {})
+        tr["gemini_done"] = int(tr.get("gemini_done", 0)) + (1 if proc.get("status") == "done" else 0)
+        tr["gemini_failed"] = int(tr.get("gemini_failed", 0)) + (0 if proc.get("status") == "done" else 1)
+        tr["last_gemini"] = {**proc, "ts": time.time()}
+    update(apply)
+
+
+def record_video(run: dict) -> None:
+    """Ultimo giro della cartella dei video + contatore cumulativo dei video mandati."""
+    def apply(d):
+        v = d.setdefault("video", {})
+        v["last"] = {**run, "ts": time.time()}
+        v["total_sent"] = int(v.get("total_sent", 0)) + int(run.get("sent", 0))
+    update(apply)
+
+
 # ─── raccolta manuale richiesta dal pannello ────────────────────────────────
 def request_run() -> None:
     """Il pannello chiede al processo menu-bar di fare subito un giro."""

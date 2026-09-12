@@ -9,10 +9,20 @@
   "agents": [
     {
       "name": "Scout AI (fallback locale)",
-      "keywords": ["intelligenza artificiale", "AI", "LLM"],
-      "rss_feeds": ["https://openai.com/blog/rss.xml"],
-      "reddit_subreddits": ["MachineLearning"],
-      "youtube_channels": ["@OpenAI"]
+      "keywords": [
+        "intelligenza artificiale",
+        "AI",
+        "LLM"
+      ],
+      "rss_feeds": [
+        "https://openai.com/blog/rss.xml"
+      ],
+      "reddit_subreddits": [
+        "MachineLearning"
+      ],
+      "youtube_channels": [
+        "@OpenAI"
+      ]
     }
   ],
   "llm_bridge": {
@@ -23,5 +33,24 @@
     "api_key": "",
     "poll_path": "/api/agent/jobs",
     "result_path": "/api/agent/jobs/result"
+  },
+  "transcripts": {
+    "enabled": true,
+    "poll_path": "/api/agent/transcribe",
+    "poll_seconds": 60,
+    "batch": 5,
+    "fallback_rounds": 5
+  },
+  "video": {
+    "enabled": false,
+    "folder": "~/HAL/Video",
+    "interval_minutes": 5,
+    "agent_name": "Cartella video",
+    "max_per_run": 20,
+    "exts": [
+      "txt",
+      "md",
+      "urls"
+    ]
   }
 }

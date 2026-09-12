@@ -8,6 +8,9 @@ Uso:
   python -m hal_agent bridge [--once]                           ponte LLM locale (polling job)
   python -m hal_agent library [--once] [--dry-run]              cartella osservata → Frontiera HAL
   python -m hal_agent documents [--once] [--dry-run] [--folder] cartella osservata → Archivio documenti
+  python -m hal_agent video [--once] [--dry-run] [--folder]     elenchi di link YouTube → Feed (trascritti)
+  python -m hal_agent transcribe [--once]                       coda trascrizioni del sito (+ fallback Gemini)
+  python -m hal_agent transcript <url|id>                       prova: stampa la trascrizione di un video
 """
 import argparse
 import logging
@@ -45,6 +48,8 @@ def main(argv=None):
     pf = sub.add_parser("pickfolder", help="Scegli la cartella osservata (finestra di sistema)")
     pf.add_argument("--documents", action="store_true",
                     help="Sceglie la cartella dei Documenti invece di quella dei Libri")
+    pf.add_argument("--video", action="store_true",
+                    help="Sceglie la cartella degli elenchi di video YouTube")
 
     pb = sub.add_parser("bridge", help="Ponte LLM locale (Ollama/LM Studio)")
     pb.add_argument("--once", action="store_true")
@@ -60,6 +65,18 @@ def main(argv=None):
                          "niente scritture (né config né stato)")
     pd.add_argument("--folder", help="Solo per prova: cartella da usare al posto di quella "
                                      "in configurazione (non viene salvata)")
+
+    pv = sub.add_parser("video", help="Elenchi di link YouTube (cartella osservata) → Feed, trascritti")
+    pv.add_argument("--once", action="store_true", help="Una lettura poi esci")
+    pv.add_argument("--dry-run", action="store_true",
+                    help="Trascrive e mostra cosa verrebbe mandato: niente rete verso HAL, niente stato")
+    pv.add_argument("--folder", help="Solo per prova: cartella da usare al posto di quella in configurazione")
+
+    pt = sub.add_parser("transcribe", help="Coda trascrizioni del sito (+ fallback Gemini)")
+    pt.add_argument("--once", action="store_true", help="Un giro poi esci")
+
+    pp = sub.add_parser("transcript", help="Prova: stampa la trascrizione di un video YouTube")
+    pp.add_argument("video", help="URL o ID del video")
 
     args = p.parse_args(argv)
     _setup_logging(args.verbose)
@@ -81,8 +98,58 @@ def main(argv=None):
 
     if args.cmd == "pickfolder":
         from . import folder_picker
-        folder_picker.open_folder_picker("documents" if args.documents else "library")
+        folder_picker.open_folder_picker("video" if args.video else ("documents" if args.documents else "library"))
         return 0
+
+    if args.cmd == "transcript":
+        from . import transcripts
+        vid = transcripts.extract_video_id(args.video)
+        if not vid:
+            print("URL o ID non riconosciuto"); return 1
+        t = transcripts.get_transcript(vid)
+        if t["status"] != "done":
+            print(f"{t['status']}: {t['detail']}"); return 1
+        print(f"# {vid} · {t['lang']} · {len(t['text'])} caratteri\n")
+        print(t["text"])
+        return 0
+
+    if args.cmd == "transcribe":
+        from . import transcripts
+        if args.once:
+            res = transcripts.poll_and_run_once(cfg.load_config(),
+                                                on_progress=lambda s: logging.getLogger("hal_agent").info(s))
+            print(f"\n→ in coda {res.get('jobs',0)}, con sottotitoli {res.get('done',0)}, "
+                  f"senza {res.get('none',0)}, errori {res.get('error',0)}, Gemini {res.get('fallback',0)}")
+            return 0
+        lp = runner.TranscriptLoop(on_status=lambda s: logging.getLogger("hal_agent").info(s))
+        lp.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            lp.stop()
+        return 0
+
+    if args.cmd == "video":
+        from . import videos
+        conf = cfg.load_config()
+        if args.folder:
+            conf = dict(conf)
+            conf["video"] = {**(conf.get("video") or {}), "folder": args.folder}
+        res = videos.scan_once(conf, dry_run=args.dry_run,
+                               on_progress=lambda s: logging.getLogger("hal_agent").info(s))
+        print(f"\n→ file {res.get('files',0)}, link {res.get('links',0)}, nuovi {res.get('new',0)}, "
+              f"mandati {res.get('sent',0)}, con sottotitoli {res.get('done',0)}, senza {res.get('none',0)}, "
+              f"errori {res.get('error',0)}")
+        if not args.once and not args.dry_run:
+            lp = runner.VideoLoop(on_status=lambda s: logging.getLogger("hal_agent").info(s))
+            lp.start()
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                lp.stop()
+        return 0 if res.get("ok") else 1
 
     if args.cmd == "run":
         if args.interval:

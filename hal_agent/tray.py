@@ -9,7 +9,7 @@ import webbrowser
 
 from . import config as cfg
 from . import __version__
-from .runner import Loop, BridgeLoop, LibraryLoop, DocumentsLoop
+from .runner import Loop, BridgeLoop, LibraryLoop, DocumentsLoop, TranscriptLoop, VideoLoop
 
 log = logging.getLogger("hal_agent.tray")
 
@@ -84,6 +84,8 @@ def run_tray():
     bridge = BridgeLoop(on_status=lambda s: status.__setitem__("text", s))
     library = LibraryLoop(on_status=lambda s: status.__setitem__("text", s))
     documents = DocumentsLoop(on_status=lambda s: status.__setitem__("text", s))
+    transcripts = TranscriptLoop(on_status=lambda s: status.__setitem__("text", s))
+    video = VideoLoop(on_status=lambda s: status.__setitem__("text", s))
 
     def _bridge_enabled():
         return bool((cfg.load_config().get("llm_bridge") or {}).get("enabled"))
@@ -93,6 +95,12 @@ def run_tray():
 
     def _documents_enabled():
         return bool((cfg.load_config().get("documents") or {}).get("enabled"))
+
+    def _video_enabled():
+        return bool((cfg.load_config().get("video") or {}).get("enabled"))
+
+    def _transcripts_enabled():
+        return bool((cfg.load_config().get("transcripts") or {}).get("enabled", True))
 
     def _folder_label(section: str):
         folder = str((cfg.load_config().get(section) or {}).get("folder") or "")
@@ -111,6 +119,9 @@ def run_tray():
     def _documents_folder_label():
         return _folder_label("documents")
 
+    def _video_folder_label():
+        return _folder_label("video")
+
     def on_pick_folder(icon, item):
         if not _open_ui("pickfolder"):
             _open_config_file()
@@ -118,6 +129,52 @@ def run_tray():
     def on_pick_doc_folder(icon, item):
         if not _open_ui("pickfolder", "--documents"):
             _open_config_file()
+
+    def on_pick_video_folder(icon, item):
+        if not _open_ui("pickfolder", "--video"):
+            _open_config_file()
+
+    def on_toggle_video(icon, item):
+        c = cfg.load_config()
+        vc = c.setdefault("video", {})
+        vc["enabled"] = not bool(vc.get("enabled"))
+        cfg.save_config(c)
+        folder = vc.get("folder", "")
+        if vc["enabled"]:
+            icon.notify(f"Video ATTIVI: i file di testo in «{folder}» vengono letti come elenchi di "
+                        "link YouTube (uno per riga). Ogni video nuovo viene trascritto e mandato al "
+                        "Feed di HAL con il testo allegato. I file non vengono toccati.",
+                        "HAL Agent")
+            video.trigger_now()   # prima lettura subito
+        else:
+            icon.notify("Video spenti: la cartella degli elenchi non viene più letta.", "HAL Agent")
+
+    def on_scan_video(icon, item):
+        if not (cfg.load_config().get("token")):
+            icon.notify("Configura prima il collegamento (server + token).", "HAL Agent")
+            return
+        video.trigger_now()
+        icon.notify("Video: lettura degli elenchi avviata.", "HAL Agent")
+
+    def on_toggle_transcripts(icon, item):
+        c = cfg.load_config()
+        tr = c.setdefault("transcripts", {})
+        tr["enabled"] = not bool(tr.get("enabled", True))
+        cfg.save_config(c)
+        if tr["enabled"]:
+            icon.notify("Trascrizioni ATTIVE: l'agente scarica i sottotitoli dei video chiesti dal sito "
+                        "e sveglia Gemini per quelli senza.", "HAL Agent")
+            transcripts.trigger_now()
+        else:
+            icon.notify("Trascrizioni spente: la coda del sito non viene più letta "
+                        "(gli Scout continuano a trascrivere i loro canali).", "HAL Agent")
+
+    def on_transcribe_now(icon, item):
+        if not (cfg.load_config().get("token")):
+            icon.notify("Configura prima il collegamento (server + token).", "HAL Agent")
+            return
+        transcripts.trigger_now()
+        icon.notify("Trascrizioni: controllo la coda del sito.", "HAL Agent")
 
     def on_toggle_library(icon, item):
         c = cfg.load_config()
@@ -275,6 +332,8 @@ def run_tray():
         bridge.stop()
         library.stop()
         documents.stop()
+        transcripts.stop()
+        video.stop()
         icon.stop()
 
     freq_menu = pystray.Menu(*[
@@ -311,6 +370,16 @@ def run_tray():
         Item("Scegli la cartella dei documenti…", on_pick_doc_folder),
         Item("Scansiona documenti ora", on_scan_documents),
         pystray.Menu.SEPARATOR,
+        Item("Video (cartella di elenchi YouTube)", on_toggle_video,
+             checked=lambda item: _video_enabled()),
+        Item(lambda item: _video_folder_label(), on_pick_video_folder),
+        Item("Scegli la cartella dei video…", on_pick_video_folder),
+        Item("Leggi gli elenchi ora", on_scan_video),
+        pystray.Menu.SEPARATOR,
+        Item("Trascrizioni per il sito (coda + Gemini)", on_toggle_transcripts,
+             checked=lambda item: _transcripts_enabled()),
+        Item("Controlla la coda ora", on_transcribe_now),
+        pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
         Item("Avanzate", avanzate),
         pystray.Menu.SEPARATOR,
@@ -323,4 +392,6 @@ def run_tray():
     bridge.start()
     library.start()
     documents.start()
+    transcripts.start()
+    video.start()
     icon.run()

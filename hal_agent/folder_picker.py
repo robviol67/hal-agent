@@ -1,9 +1,9 @@
-"""Selettore nativo della «cartella osservata» (capability Libreria e Documenti).
+"""Selettore nativo della «cartella osservata» (capability Libreria, Documenti e Video).
 
 Apre una finestra di scelta cartella del sistema (Tk askdirectory) e salva il
-percorso in config.library.folder oppure config.documents.folder — così l'utente
-non deve editare il JSON a mano. Gira in un PROCESSO SEPARATO (comando
-`pickfolder [--documents]`): Tk vuole il suo main-loop, come già per
+percorso in config.library.folder, config.documents.folder o config.video.folder —
+così l'utente non deve editare il JSON a mano. Gira in un PROCESSO SEPARATO (comando
+`pickfolder [--documents|--video]`): Tk vuole il suo main-loop, come già per
 `panel`/`configui`.
 """
 import logging
@@ -23,6 +23,11 @@ _SECTIONS = {
         "Scegli la cartella dei documenti da osservare",
         "I Documenti sono attivi: i file nuovi verranno convertiti in Markdown e "
         "inviati all'Archivio. Gli originali restano dove sono.",
+    ),
+    "video": (
+        "Scegli la cartella degli elenchi di video YouTube",
+        "I Video sono attivi: metti qui file di testo con un link YouTube per riga. "
+        "Ogni video nuovo viene trascritto e mandato al Feed. I file non vengono toccati.",
     ),
 }
 

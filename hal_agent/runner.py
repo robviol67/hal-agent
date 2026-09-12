@@ -335,6 +335,143 @@ class DocumentsLoop:
         self._stop.set()
 
 
+class TranscriptLoop:
+    """
+    Loop delle trascrizioni per il sito: ogni transcripts.poll_seconds guarda la
+    coda (/api/agent/transcribe), scarica i sottotitoli dei video richiesti e li
+    rimanda; poi sveglia il fallback Gemini del server per i video senza
+    sottotitoli. Lavora solo se c'è qualcosa in coda: a vuoto costa una GET al
+    minuto. Rilegge la config a ogni giro. trigger_now() forza un giro subito.
+    """
+    def __init__(self, on_status=None):
+        self._stop = threading.Event()
+        self._thread = None
+        self._trigger = threading.Event()
+        self.on_status = on_status or (lambda s: None)
+
+    def _status(self, msg):
+        try:
+            self.on_status(msg)
+        except Exception:
+            pass
+        telemetry.set_status(msg)
+
+    def _run(self):
+        from . import transcripts
+        last = 0.0
+        while not self._stop.is_set():
+            conf = cfg.load_config()
+            tr = conf.get("transcripts", {}) or {}
+            enabled = bool(tr.get("enabled", True)) and bool(conf.get("token"))
+            every = max(20, int(tr.get("poll_seconds", 60) or 60))
+            now = time.monotonic()
+            forced = self._trigger.is_set()
+            if forced:
+                self._trigger.clear()
+            if forced or (enabled and now - last >= every):
+                last = now
+                try:
+                    res = transcripts.poll_and_run_once(conf, on_progress=self._status)
+                    if res.get("jobs") or res.get("fallback"):
+                        msg = (f"Trascrizioni: {res.get('done',0)} con sottotitoli, "
+                               f"{res.get('none',0)} senza, {res.get('error',0)} da ritentare")
+                        if res.get("fallback"):
+                            msg += f", Gemini: {res['fallback']}"
+                        self._status(msg)
+                        remote.send_status(conf, msg)
+                        # se ha lavorato, riguarda subito: potrebbero essercene altri
+                        last = now - every + 10
+                except Exception as e:
+                    log.error("Trascrizioni: giro fallito: %s", e)
+            self._stop.wait(5)
+
+    def trigger_now(self):
+        self._trigger.set()
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+
+class VideoLoop:
+    """
+    Loop della cartella osservata dei VIDEO (elenchi di link YouTube): se
+    video.enabled è true, ogni video.interval_minutes rilegge i file .txt,
+    trascrive i link nuovi e li manda al Feed. Rilegge la config a ogni giro.
+    trigger_now() forza una lettura subito.
+    """
+    def __init__(self, on_status=None):
+        self._stop = threading.Event()
+        self._thread = None
+        self._trigger = threading.Event()
+        self.on_status = on_status or (lambda s: None)
+
+    def _status(self, msg):
+        try:
+            self.on_status(msg)
+        except Exception:
+            pass
+        telemetry.set_status(msg)
+
+    def _scan(self, conf):
+        from . import videos
+        last_remote = [0.0]
+        def prog(m):
+            self._status(m)
+            now = time.monotonic()
+            if now - last_remote[0] >= 20:
+                last_remote[0] = now
+                remote.send_status(conf, m)
+        res = videos.scan_once(conf, on_progress=prog)
+        if res.get("new") or not res.get("ok"):
+            remote.send_status(conf, f"Video: {res.get('sent',0)} mandati al Feed, "
+                                     f"{res.get('none',0)} senza sottotitoli")
+        try:
+            telemetry.record_video(res)
+        except Exception:
+            pass
+        return res
+
+    def _run(self):
+        last_scan = 0.0
+        while not self._stop.is_set():
+            conf = cfg.load_config()
+            vc = conf.get("video", {}) or {}
+            enabled = bool(vc.get("enabled"))
+            interval = max(1, int(vc.get("interval_minutes", 5))) * 60
+            now = time.monotonic()
+            forced = self._trigger.is_set()
+            if forced:
+                self._trigger.clear()
+            if forced or (enabled and now - last_scan >= interval):
+                last_scan = now
+                try:
+                    self._scan(conf)
+                except Exception as e:
+                    log.error("Video: giro fallito: %s", e)
+                    self._status(f"Video: errore {e}")
+            self._stop.wait(5)
+
+    def trigger_now(self):
+        self._trigger.set()
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+
 class BridgeLoop:
     """
     Loop del ponte LLM: se llm_bridge.enabled è true in config, interroga il

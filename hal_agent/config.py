@@ -66,6 +66,30 @@ DEFAULT_CONFIG = {
         "move_sent": False,                   # NON sposta gli originali (opzionale)
         "sent_subdir": "inviati",             # sotto-cartella usata solo se move_sent è true
         "exts": ["pdf", "docx", "rtf", "txt", "md", "pptx", "ppt", "key"]
+    },
+    # Trascrizioni dei video YouTube per il sito: l'agente svuota la coda
+    # (/api/agent/transcribe) dei video per cui è stata chiesta la trascrizione
+    # dal Feed o che lo Scout non era riuscito a scaricare, e sveglia il
+    # fallback Gemini del server per i video senza sottotitoli. Acceso di default:
+    # lavora solo se c'è qualcosa in coda.
+    "transcripts": {
+        "enabled": True,
+        "poll_path": "/api/agent/transcribe",
+        "poll_seconds": 60,                   # ogni quanto guarda la coda
+        "batch": 5,                           # video per richiesta
+        "fallback_rounds": 5                  # max video Gemini per giro (uno per richiesta)
+    },
+    # Capability «Video»: la terza cartella osservata. Dentro NON ci vanno file da
+    # caricare ma ELENCHI DI LINK YouTube (file .txt, un link per riga, # = commento).
+    # Ogni video nuovo viene trascritto (sottotitoli) e mandato al Feed con la
+    # trascrizione allegata, Scout «Cartella video». I file non vengono toccati.
+    "video": {
+        "enabled": False,                     # spento di default: si attiva dal menu-bar
+        "folder": str(Path.home() / "HAL" / "Video"),  # cartella osservata
+        "interval_minutes": 5,                # ogni quanto rilegge gli elenchi
+        "agent_name": "Cartella video",       # nome dello Scout con cui compaiono nel Feed
+        "max_per_run": 20,                    # video nuovi per giro
+        "exts": ["txt", "md", "urls"]
     }
 }
 

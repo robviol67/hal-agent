@@ -1,5 +1,5 @@
 """
-Fetcher standalone — RSS/Atom, Substack, Reddit, YouTube (con trascrizioni).
+Fetcher standalone — RSS/Atom, Substack, Reddit, YouTube (con trascrizioni intere, vedi transcripts.py).
 Adattato da HAL backend/services/fetcher.py, senza dipendenze dal backend.
 Gira sull'IP residenziale del PC dell'utente: trascrizioni gratuite, niente blocchi datacenter.
 """
@@ -10,12 +10,7 @@ from datetime import datetime, timedelta
 import feedparser
 import httpx
 
-try:
-    from youtube_transcript_api import YouTubeTranscriptApi
-    from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
-    YT_AVAILABLE = True
-except Exception:
-    YT_AVAILABLE = False
+from . import transcripts
 
 log = logging.getLogger("hal_agent.fetcher")
 
@@ -131,7 +126,15 @@ def _resolve_youtube_channel(channel_input: str) -> str:
     raise ValueError(f"Canale YouTube non risolvibile: {channel_input}")
 
 
-def fetch_youtube_channel(channel_input: str, keywords: list, days_limit: int = 0, limit: int = 10) -> list:
+def fetch_youtube_channel(channel_input: str, keywords: list, days_limit: int = 0, limit: int = 10,
+                          transcribe: bool = True, progress=None) -> list:
+    """
+    Video recenti di un canale (RSS) e, se `transcribe`, la trascrizione INTERA di
+    ciascuno (sottotitoli YouTube): viaggia nel campo `transcript` con
+    `transcript_status` = done | none | error, e il server la salva accanto al
+    video nel Feed. L'estratto resta un'anteprima. Se i sottotitoli non ci sono
+    (none) sarà il server a passare il video a Gemini.
+    """
     try:
         cid = _resolve_youtube_channel(channel_input)
     except ValueError as e:
@@ -142,12 +145,20 @@ def fetch_youtube_channel(channel_input: str, keywords: list, days_limit: int = 
     if days_limit > 0:
         cutoff = datetime.now() - timedelta(days=days_limit)
         raw = [i for i in raw if _is_recent(i, cutoff)]
-    for it in raw:
+    if not transcribe:
+        return raw
+    for n, it in enumerate(raw):
         vid = _extract_yt_id(it["url"])
-        if vid:
-            t = _get_transcript(vid)
-            if t:
-                it["excerpt"] = _clean(t, 800)
+        if not vid:
+            continue
+        if progress:
+            progress(f"trascrizione {n + 1}/{len(raw)}")
+        t = transcripts.get_transcript(vid)
+        it["transcript"] = t["text"]
+        it["transcript_status"] = t["status"]
+        it["transcript_detail"] = t["detail"]
+        if t["text"]:
+            it["excerpt"] = _clean(t["text"], 800)
     return raw
 
 
@@ -162,21 +173,7 @@ def _is_recent(item: dict, cutoff) -> bool:
 
 
 def _extract_yt_id(url: str):
-    m = re.search(r"(?:v=|youtu\.be/|embed/|shorts/)([A-Za-z0-9_-]{11})", url)
-    return m.group(1) if m else None
-
-
-def _get_transcript(video_id: str):
-    if not YT_AVAILABLE:
-        return None
-    try:
-        parts = YouTubeTranscriptApi.get_transcript(video_id, languages=["it", "en", "en-US"])
-        return " ".join(p["text"] for p in parts)
-    except (TranscriptsDisabled, NoTranscriptFound):
-        return None
-    except Exception as e:
-        log.debug("Transcript error %s: %s", video_id, e)
-        return None
+    return transcripts.extract_video_id(url)
 
 
 def _clean(text: str, max_len: int = 500) -> str:
@@ -208,7 +205,13 @@ def run_agent(agent: dict, days_limit: int = 0, progress=None, errors=None) -> l
         elif kind == "reddit":
             items = fetch_reddit(target, keywords)
         else:
-            items = fetch_youtube_channel(target, keywords, days_limit=days_limit)
+            # yt_transcribe arriva dal sito (per Scout); se manca, si trascrive
+            def yt_prog(msg, _i=idx, _n=len(tasks), _t=target):
+                if progress:
+                    progress(_i, _n, "youtube", f"{_t} · {msg}")
+            items = fetch_youtube_channel(target, keywords, days_limit=days_limit,
+                                          transcribe=bool(agent.get("yt_transcribe", True)),
+                                          progress=yt_prog)
         for it in items:
             it["agent"] = agent.get("name", "")
         results.extend(items)
