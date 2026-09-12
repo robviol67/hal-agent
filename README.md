@@ -38,6 +38,11 @@ python -m hal_agent video --once     # elenchi di link YouTube (cartella osserva
 python -m hal_agent transcript URL   # prova: stampa la trascrizione di un video
 ```
 
+## Parole chiave (v0.6.1)
+Le parole chiave di uno Scout filtrano **solo RSS e Reddit** (su titolo e sommario).
+I **canali YouTube si prendono interi**: un canale è già tematico, e titoli e descrizioni
+dei video sono spesso fuorvianti.
+
 ## Trascrizioni dei video YouTube (v0.6)
 I video dei canali YouTube degli Scout arrivano nel Feed **con la trascrizione intera**
 (sottotitoli di YouTube, manuali o automatici: gratis, un secondo a video). Si decide

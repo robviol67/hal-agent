@@ -209,7 +209,10 @@ def run_agent(agent: dict, days_limit: int = 0, progress=None, errors=None) -> l
             def yt_prog(msg, _i=idx, _n=len(tasks), _t=target):
                 if progress:
                     progress(_i, _n, "youtube", f"{_t} · {msg}")
-            items = fetch_youtube_channel(target, keywords, days_limit=days_limit,
+            # Un canale YouTube è già tematico: si prende INTERO, senza il filtro per
+            # parole chiave (che agirebbe su titolo e descrizione, spesso fuorvianti).
+            # Le parole chiave filtrano solo RSS e Reddit.
+            items = fetch_youtube_channel(target, [], days_limit=days_limit,
                                           transcribe=bool(agent.get("yt_transcribe", True)),
                                           progress=yt_prog)
         for it in items:
