@@ -64,6 +64,8 @@ def _iter_files(folder: str, exts: set):
         for name in files:
             if name.startswith(_SKIP_PREFIX) or name.lower().endswith(_SKIP_SUFFIX):
                 continue
+            if name == README_NAME:          # il promemoria non è un elenco
+                continue
             if os.path.splitext(name)[1].lower().lstrip(".") in exts:
                 yield os.path.join(root, name)
 
@@ -185,6 +187,74 @@ def _read_entries(path: str, text_only=None, project=None) -> list:
     return out
 
 
+README_NAME = "COME SI SCRIVE.txt"
+README_TEXT = """\
+COME SI SCRIVE UN ELENCO — cartella video di HAL
+================================================
+
+In questa cartella NON vanno i video: vanno file di testo (.txt) con
+UN LINK YOUTUBE PER RIGA. Va bene qualunque forma del link, e va bene
+anche l'indirizzo di una PLAYLIST intera.
+
+    # le righe che iniziano con # sono commenti
+    https://www.youtube.com/watch?v=XXXXXXXXXXX
+    https://youtu.be/XXXXXXXXXXX
+    https://youtube.com/playlist?list=PL...      <- tutta la playlist
+
+DI QUESTO VOGLIO SOLO IL TESTO
+------------------------------
+Se di un video non ti interessa guardarlo ma leggerlo, marcalo: appena la
+trascrizione è pronta HAL la archivia da sola in «Leggi», come documento.
+Tre modi, dal più generale al più preciso (l'ultimo vince):
+
+  1. CARTELLA   metti il file in una sottocartella «Solo testo»
+  2. FILE       scrivi una riga     #! testo
+  3. RIGA       aggiungi in fondo   [testo]
+
+IL PROGETTO
+-----------
+Dopo la freccia indichi dove finisce il testo. Se il progetto non esiste,
+viene creato.
+
+    #! testo -> Ricerca AI
+    https://youtu.be/XXXXXXXXXXX                 (solo testo, in «Ricerca AI»)
+    https://youtu.be/XXXXXXXXXXX  [video]        (eccezione: questo si guarda)
+    https://youtu.be/XXXXXXXXXXX  [testo -> Frontiera]
+    https://youtu.be/XXXXXXXXXXX  [-> Ricerca AI]  (resta un video, ma nel progetto)
+
+COSE DA SAPERE
+--------------
+- I file non vengono mai modificati né spostati: aggiungi righe quando vuoi.
+- Un link già mandato non viene rimandato; se però gli cambi marcatore, sì.
+- Togliere una riga non cancella niente: quello che è arrivato resta.
+- Le playlist restano sotto osservazione: i video aggiunti dopo arrivano da soli.
+- Un link «watch?v=...&list=...» è UN video solo: per prendere tutta la
+  playlist serve l'indirizzo che comincia con «playlist?list=».
+
+NON TI VA DI SCRIVERE FILE?
+---------------------------
+Sul sito c'è «Aggiungi video»: incolli link, playlist o un canale, scegli
+dove mandarli e in quale progetto, e non c'è nessuna sintassi da ricordare.
+Funziona anche dal telefono.
+"""
+
+
+def _ensure_readme(folder: str, vstate) -> None:
+    """Mette il promemoria nella cartella, una volta sola: la sintassi sta dove serve."""
+    if vstate is None:
+        return
+    if vstate.get("readme_written"):
+        return
+    path = os.path.join(folder, README_NAME)
+    try:
+        if not os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(README_TEXT)
+        vstate["readme_written"] = True
+    except OSError as e:
+        log.debug("promemoria non scritto: %s", e)
+
+
 def _signature(e: dict) -> str:
     """Come è stato mandato un link: cambiando marcatore cambia la firma e si rimanda."""
     return ("T" if e["text_only"] else "V") + "|" + (e["project"] or "")
@@ -275,6 +345,8 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False,
     sent_modes = dict(vstate.get("sent_modes", {})) if not dry_run else {}
 
     prog(f"Video: lettura di {folder}…")
+    if not dry_run:
+        _ensure_readme(folder, vstate)
     raw = []
     for path in _iter_files(folder, exts):
         result["files"] += 1

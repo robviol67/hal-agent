@@ -77,7 +77,8 @@ DEFAULT_CONFIG = {
         "poll_path": "/api/agent/transcribe",
         "poll_seconds": 60,                   # ogni quanto guarda la coda
         "batch": 5,                           # video per richiesta
-        "fallback_rounds": 5                  # max video Gemini per giro (uno per richiesta)
+        "fallback_rounds": 5,                 # max video Gemini per giro (uno per richiesta)
+        "watch_minutes": 20                   # ogni quanto si sveglia il sito per playlist/canali sorvegliati
     },
     # Capability «Video»: la terza cartella osservata. Dentro NON ci vanno file da
     # caricare ma ELENCHI DI LINK YouTube (file .txt, un link per riga, # = commento).

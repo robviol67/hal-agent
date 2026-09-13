@@ -111,6 +111,18 @@ https://youtube.com/playlist?list=PLfGPUS4FpAm9pbXXUGLPWjSN64CvIHfKv  [testo →
 - Un link `watch?v=…&list=…` resta **un video solo**: per prendere tutta la playlist serve
   l'indirizzo della playlist (quello con `playlist?list=`), o l'id nudo `PL…`.
 
+### Non ti va di scrivere file?
+
+Sul sito c'è **«Aggiungi video»** (`/aggiungi.php`): si incolla e basta — link, playlist o
+un canale `@nome` — si sceglie dove mandarli e in quale progetto, senza nessuna sintassi da
+ricordare. Funziona anche dal telefono e per chi l'agente non ce l'ha.
+
+Le playlist e i canali sorvegliati dal sito li legge **il server**; l'agente fa solo da
+sveglia (`/api/agent/watch`, ogni `transcripts.watch_minutes` = 20 minuti).
+
+Nella cartella dei video l'agente lascia un promemoria — `COME SI SCRIVE.txt` — con questa
+stessa sintassi e qualche esempio. Se lo cancelli non torna.
+
 Il loop «Trascrizioni per il sito» gira sempre (una GET al minuto a vuoto) e si può spegnere
 dal menu; gli Scout trascrivono comunque i propri canali durante la raccolta.
 

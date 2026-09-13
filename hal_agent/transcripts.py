@@ -150,6 +150,34 @@ def _path(conf: dict) -> str:
     return conf["server_url"].rstrip("/") + tr.get("poll_path", "/api/agent/transcribe")
 
 
+def wake_watched(conf: dict, on_progress=None) -> dict:
+    """
+    Sveglia per le playlist e i canali sorvegliati dal sito: il lavoro lo fa il
+    server (legge la playlist, inserisce i video nuovi), qui si bussa e basta.
+    Ritorna {"checked": n, "new": n}. Silenziosa se l'endpoint non c'è (sito
+    non ancora aggiornato) o se non c'è niente da guardare.
+    """
+    out = {"checked": 0, "new": 0}
+    if not conf.get("token") or not conf.get("server_url"):
+        return out
+    url = conf["server_url"].rstrip("/") + "/api/agent/watch"
+    try:
+        r = httpx.get(url, params={"max": 1}, headers=_headers(conf), timeout=120)
+        if r.status_code == 404:
+            return out
+        r.raise_for_status()
+        data = r.json() or {}
+    except Exception as e:
+        log.debug("sveglia playlist sorvegliate fallita: %s", e)
+        return out
+    for c in (data.get("checked") or []):
+        out["checked"] += 1
+        out["new"] += int(c.get("new", 0) or 0)
+        if on_progress and c.get("new"):
+            on_progress(f"Playlist «{c.get('title') or c.get('list')}»: {c['new']} video nuovi")
+    return out
+
+
 def poll_and_run_once(conf: dict, on_progress=None) -> dict:
     """
     Un giro: preleva i video in coda, scarica i sottotitoli, rimanda i risultati,

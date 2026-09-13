@@ -359,10 +359,23 @@ class TranscriptLoop:
     def _run(self):
         from . import transcripts
         last = 0.0
+        last_watch = 0.0
         while not self._stop.is_set():
             conf = cfg.load_config()
             tr = conf.get("transcripts", {}) or {}
             enabled = bool(tr.get("enabled", True)) and bool(conf.get("token"))
+            # sveglia per le playlist/canali sorvegliati dal sito (il lavoro lo fa il server)
+            watch_every = max(5, int(tr.get("watch_minutes", 20) or 20)) * 60
+            if conf.get("token") and time.monotonic() - last_watch >= watch_every:
+                last_watch = time.monotonic()
+                try:
+                    w = transcripts.wake_watched(conf, on_progress=self._status)
+                    if w.get("new"):
+                        msg = f"Playlist sorvegliate: {w['new']} video nuovi"
+                        self._status(msg)
+                        remote.send_status(conf, msg)
+                except Exception as e:
+                    log.debug("sveglia sorvegliate: %s", e)
             every = max(20, int(tr.get("poll_seconds", 60) or 60))
             now = time.monotonic()
             forced = self._trigger.is_set()
