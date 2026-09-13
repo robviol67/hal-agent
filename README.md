@@ -61,6 +61,36 @@ Oltre agli Scout:
   elemento dello Scout «Cartella video». I file non vengono modificati: si continua ad
   aggiungere righe.
 
+### Video «solo testo» (di alcuni interessa la trascrizione, non il video)
+
+Un link può essere marcato: HAL non lo tratta come qualcosa da guardare, ma appena la
+trascrizione è pronta la archivia da sola in **«Leggi»**, come documento, nel progetto
+indicato. Tre modi, dal più generale al più preciso (l'ultimo vince):
+
+| Dove | Come | Vale per |
+|---|---|---|
+| **Cartella** | una sottocartella `Solo testo` (o `Trascrizioni`) | tutti i link lì dentro |
+| **File** | una riga `#! testo` | tutto il file, ovunque sia scritta |
+| **Riga** | `[testo]` in fondo alla riga | quel link soltanto |
+
+Dopo la freccia si indica il **progetto** di destinazione — e il progetto si può chiedere
+anche per un video che resta da guardare:
+
+```
+#! testo → Ricerca AI
+https://youtu.be/AAAAAAAAAAA               solo testo, progetto «Ricerca AI»
+https://youtu.be/BBBBBBBBBBB  [video]      eccezione: questo si guarda
+https://youtu.be/CCCCCCCCCCC  [testo → Frontiera]
+https://youtu.be/DDDDDDDDDDD  [→ Ricerca AI]   resta un video, ma finisce nel progetto
+```
+
+Il progetto viene cercato fra i tuoi (senza badare a maiuscole; «Ricerca» trova «Ricerca AI»
+se è l'unico che somiglia) e, se non esiste, **viene creato**. Aggiungere il marcatore a un
+link **già mandato** lo rimanda: HAL non duplica la notizia, la rimarca e archivia il testo.
+Toglierlo invece non cancella niente di già archiviato.
+
+Serve la migration `/api/migrate_video_text.php` sul sito.
+
 Il loop «Trascrizioni per il sito» gira sempre (una GET al minuto a vuoto) e si può spegnere
 dal menu; gli Scout trascrivono comunque i propri canali durante la raccolta.
 

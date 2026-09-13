@@ -83,6 +83,9 @@ DEFAULT_CONFIG = {
     # caricare ma ELENCHI DI LINK YouTube (file .txt, un link per riga, # = commento).
     # Ogni video nuovo viene trascritto (sottotitoli) e mandato al Feed con la
     # trascrizione allegata, Scout «Cartella video». I file non vengono toccati.
+    # «Solo testo»: sottocartella «Solo testo», riga `#! testo` nel file o marcatore
+    # `[testo → Progetto]` in fondo alla riga → di quel video HAL archivia da sola la
+    # trascrizione in «Leggi», nel progetto indicato (vedi videos.py).
     "video": {
         "enabled": False,                     # spento di default: si attiva dal menu-bar
         "folder": str(Path.home() / "HAL" / "Video"),  # cartella osservata

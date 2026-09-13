@@ -17,11 +17,32 @@ Per ogni link nuovo l'agente:
      «Cartella video»), con la trascrizione allegata. Se i sottotitoli non
      esistono, lo dice al server, che passa il video a Gemini.
 
+SOLO TESTO — di certi video interessa la trascrizione, non la parte visiva.
+Si marcano nell'elenco in tre modi (l'uno vince sull'altro, in quest'ordine):
+
+  1. CARTELLA   ~/HAL/Video/Solo testo/…      tutti i link lì dentro
+  2. FILE       `#! testo` in una riga         tutto il file (ovunque si trovi)
+  3. RIGA       `[testo]` in fondo alla riga   solo quel link
+
+Dopo la freccia si può indicare il PROGETTO di destinazione, e il progetto si
+può chiedere anche per un video normale:
+
+    #! testo → Ricerca AI
+    https://youtu.be/AAAAAAAAAAA               (solo testo, progetto Ricerca AI)
+    https://youtu.be/BBBBBBBBBBB  [video]      (eccezione: questo si guarda)
+    https://youtu.be/CCCCCCCCCCC  [testo → Frontiera]
+    https://youtu.be/DDDDDDDDDDD  [→ Ricerca AI]   (resta un video, ma nel progetto)
+
+HAL riceve il marcatore e, appena la trascrizione è pronta, archivia da solo il
+testo in «Leggi» dentro quel progetto (server: lib/videotext.php).
+
 I file NON vengono modificati né spostati: si può continuare ad aggiungere
-righe. Il dedup sta nello stato locale (ID già mandati) e nel server (url_hash).
+righe. Il dedup sta nello stato locale (ID già mandati, con la loro modalità:
+cambiare marcatore a un link già mandato lo rimanda) e nel server (url_hash).
 """
 import logging
 import os
+import re
 
 import httpx
 
@@ -45,23 +66,118 @@ def _iter_files(folder: str, exts: set):
                 yield os.path.join(root, name)
 
 
-def _read_ids(path: str) -> list:
-    """ID video (unici, in ordine) trovati nel file; righe # = commenti."""
-    ids, seen = [], set()
+# --- marcatori «solo testo» / progetto -------------------------------------
+# Parole che dicono «di questo interessa il testo» e parole che dicono il contrario.
+_TEXT_WORDS = {"testo", "solo testo", "soltanto testo", "trascrizione", "solo trascrizione",
+               "trascrizioni", "leggi", "text"}
+_VIDEO_WORDS = {"video", "guarda", "da guardare", "ascolta", "normale"}
+_PROJ_WORDS = {"progetto", "project", "studio"}
+# freccia fra la modalità e il nome del progetto: «testo → Ricerca AI»
+_ARROW = re.compile(r"\s*(?:→|->|=>|»|·|:|>)\s*")
+# marcatore di riga: [testo], [testo → Progetto], [→ Progetto], [video]
+_MARK = re.compile(r"\[([^\[\]]{1,160})\]")
+
+
+def _norm(s: str) -> str:
+    """Minuscole, separatori appianati: «Solo-Testo» e «solo testo» sono la stessa cosa."""
+    s = (s or "").strip().lower().replace("_", " ").replace("-", " ")
+    return " ".join(s.split())
+
+
+def _parse_spec(spec: str, strict: bool = False):
+    """
+    Legge un marcatore e ritorna (text_only, project), entrambi None se non dice niente.
+    `strict` (nomi di cartella): una parola sconosciuta NON diventa un progetto,
+    altrimenti qualunque sottocartella finirebbe per battezzare un progetto.
+    """
+    spec = (spec or "").strip()
+    if not spec:
+        return None, None
+    parts = _ARROW.split(spec, 1)
+    head = _norm(parts[0])
+    tail = parts[1].strip() if len(parts) > 1 else ""
+
+    if head in _TEXT_WORDS:
+        return True, (tail or None)
+    if head in _VIDEO_WORDS:
+        return False, (tail or None)
+    if head in _PROJ_WORDS:
+        return None, (tail or None)
+    if head == "":                      # «[→ Ricerca AI]»: solo il progetto
+        return None, (tail or None)
+    if strict:
+        return None, None
+    # testa sconosciuta: è il nome di un progetto — «[Ricerca AI]»
+    return None, (spec or None)
+
+
+def _folder_spec(folder: str, path: str):
+    """Modalità che arriva dal NOME DELLE SOTTOCARTELLE sotto la cartella osservata."""
+    text_only, project = None, None
+    try:
+        rel = os.path.relpath(os.path.dirname(path), folder)
+    except ValueError:
+        return None, None
+    if rel in (".", os.curdir, ""):
+        return None, None
+    for seg in rel.split(os.sep):
+        t, p = _parse_spec(seg, strict=True)
+        if t is not None:
+            text_only = t
+        if p:
+            project = p
+    return text_only, project
+
+
+def _read_entries(path: str, text_only=None, project=None) -> list:
+    """
+    Link trovati nel file, in ordine e senza ripetizioni, ciascuno con la sua
+    modalità: [{'vid', 'text_only', 'project'}]. Righe `#` = commenti, righe
+    `#!` = direttive che valgono per TUTTO il file (anche se stanno in fondo).
+    """
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                s = line.strip()
-                if not s or s.startswith("#"):
-                    continue
-                for tok in s.replace(",", " ").split():
-                    vid = transcripts.extract_video_id(tok)
-                    if vid and vid not in seen:
-                        seen.add(vid)
-                        ids.append(vid)
+            lines = fh.read().splitlines()
     except OSError as e:
         log.debug("file non leggibile %s: %s", path, e)
-    return ids
+        return []
+
+    # 1° passaggio: le direttive del file (valgono ovunque siano scritte)
+    for line in lines:
+        t = line.strip()
+        if t.startswith("#!"):
+            ft, fp = _parse_spec(t[2:])
+            if ft is not None:
+                text_only = ft
+            if fp:
+                project = fp
+
+    # 2° passaggio: i link, con l'eventuale marcatore di riga
+    out, seen = [], set()
+    for line in lines:
+        t = line.strip()
+        if not t or t.startswith("#"):
+            continue
+        lt, lp = text_only, project
+        m = _MARK.search(t)
+        if m:
+            mt, mp = _parse_spec(m.group(1))
+            if mt is not None:
+                lt = mt
+            if mp:
+                lp = mp
+            t = (t[:m.start()] + " " + t[m.end():]).strip()
+        for tok in t.replace(",", " ").split():
+            vid = transcripts.extract_video_id(tok)
+            if vid and vid not in seen:
+                seen.add(vid)
+                out.append({"vid": vid, "text_only": bool(lt), "project": (lp or "")})
+    return out
+
+
+def _signature(e: dict) -> str:
+    """Come è stato mandato un link: cambiando marcatore cambia la firma e si rimanda."""
+    return ("T" if e["text_only"] else "V") + "|" + (e["project"] or "")
 
 
 def _oembed(video_id: str) -> dict:
@@ -89,8 +205,8 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
         if on_progress:
             on_progress(m)
 
-    result = {"files": 0, "links": 0, "new": 0, "sent": 0, "done": 0, "none": 0, "error": 0,
-              "fallback": 0, "folder": vc.get("folder", ""), "ok": True}
+    result = {"files": 0, "links": 0, "new": 0, "text": 0, "sent": 0, "done": 0, "none": 0,
+              "error": 0, "fallback": 0, "folder": vc.get("folder", ""), "ok": True}
 
     folder = vc.get("folder") or ""
     if not folder or not os.path.isdir(folder):
@@ -109,24 +225,36 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
     state = {} if dry_run else cfg.load_state()
     vstate = state.setdefault("video", {}) if not dry_run else {}
     sent_ids = set(vstate.get("sent_ids", [])) if not dry_run else set()
+    # firma di come ogni link è stato mandato (modalità + progetto): i link mandati
+    # prima di questa versione non ce l'hanno e valgono come video normali, così
+    # l'aggiornamento dell'agente non rimanda tutto da capo.
+    sent_modes = dict(vstate.get("sent_modes", {})) if not dry_run else {}
 
     prog(f"Video: lettura di {folder}…")
-    ids = []
+    todo_all, seen = [], set()
     for path in _iter_files(folder, exts):
         result["files"] += 1
-        for vid in _read_ids(path):
+        ft, fp = _folder_spec(folder, path)
+        for e in _read_entries(path, ft, fp):
             result["links"] += 1
-            if vid not in sent_ids and vid not in ids:
-                ids.append(vid)
-    result["new"] = len(ids)
-    if not ids:
+            vid = e["vid"]
+            if vid in seen:
+                continue
+            already = vid in sent_ids and sent_modes.get(vid, "V|") == _signature(e)
+            if not already:
+                seen.add(vid)
+                todo_all.append(e)
+    result["new"] = len(todo_all)
+    result["text"] = sum(1 for e in todo_all if e["text_only"])
+    if not todo_all:
         prog(f"Video: nessun link nuovo ({result['links']} in {result['files']} file)")
         return result
-    todo = ids[:max_per_run]
+    todo = todo_all[:max_per_run]
 
     items = []
-    for i, vid in enumerate(todo):
-        prog(f"Video: {i + 1}/{len(todo)} — {vid}")
+    for i, e in enumerate(todo):
+        vid = e["vid"]
+        prog(f"Video: {i + 1}/{len(todo)} — {vid}" + (" (solo testo)" if e["text_only"] else ""))
         meta = _oembed(vid)
         title = meta["title"] or ("Video " + vid)
         t = transcripts.get_transcript(vid)
@@ -144,14 +272,22 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
             "transcript": t["text"],
             "transcript_status": t["status"],
             "transcript_detail": t["detail"],
+            # marcatori dell'elenco: HAL archivia da solo il testo in «Leggi»
+            "text_only": bool(e["text_only"]),
+            "project": e["project"],
             "_vid": vid,
+            "_sig": _signature(e),
         })
         if dry_run:
-            print(f"{vid}  {title[:60]}  →  {t['status']}"
+            mode = "solo testo" if e["text_only"] else "video"
+            if e["project"]:
+                mode += f" → {e['project']}"
+            print(f"{vid}  {title[:50]}  [{mode}]  →  {t['status']}"
                   + (f" ({len(t['text'])} caratteri, {t['lang']})" if t["status"] == "done" else f" ({t['detail']})"))
 
     if dry_run:
-        prog(f"Video (dry-run): {len(todo)} nuovi, {result['done']} con sottotitoli, {result['none']} senza")
+        prog(f"Video (dry-run): {len(todo)} nuovi ({result['text']} solo testo), "
+             f"{result['done']} con sottotitoli, {result['none']} senza")
         return result
 
     payload = [{k: v for k, v in it.items() if not k.startswith("_")} for it in items]
@@ -161,8 +297,11 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
         # in coda 'pending' e li riprende il giro delle trascrizioni, non questo.
         for it in items:
             sent_ids.add(it["_vid"])
+            sent_modes[it["_vid"]] = it["_sig"]
         result["sent"] = len(items)
-        vstate["sent_ids"] = list(sent_ids)[-20000:]
+        keep = list(sent_ids)[-20000:]
+        vstate["sent_ids"] = keep
+        vstate["sent_modes"] = {v: sent_modes[v] for v in keep if v in sent_modes}
         cfg.save_state(state)
         if result["none"] > 0:
             result["fallback"] = transcripts.run_fallback(conf, on_progress=prog)
@@ -170,12 +309,13 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
         result["ok"] = False
         result["error_msg"] = res.get("error", "invio fallito")
 
-    msg = (f"Video: {result['sent']} mandati al Feed, {result['done']} con sottotitoli, "
-           f"{result['none']} senza (Gemini: {result['fallback']})")
+    msg = (f"Video: {result['sent']} mandati al Feed"
+           + (f" ({result['text']} solo testo)" if result["text"] else "")
+           + f", {result['done']} con sottotitoli, {result['none']} senza (Gemini: {result['fallback']})")
     if result["error"]:
         msg += f", {result['error']} da ritentare"
     prog(msg)
-    log.info("Video: file=%d link=%d nuovi=%d inviati=%d done=%d none=%d err=%d",
-             result["files"], result["links"], result["new"], result["sent"],
+    log.info("Video: file=%d link=%d nuovi=%d (solo testo=%d) inviati=%d done=%d none=%d err=%d",
+             result["files"], result["links"], result["new"], result["text"], result["sent"],
              result["done"], result["none"], result["error"])
     return result

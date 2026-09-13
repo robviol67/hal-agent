@@ -142,7 +142,8 @@ def run_tray():
         folder = vc.get("folder", "")
         if vc["enabled"]:
             icon.notify(f"Video ATTIVI: i file di testo in «{folder}» vengono letti come elenchi di "
-                        "link YouTube (uno per riga). Ogni video nuovo viene trascritto e mandato al "
+                        "link YouTube (uno per riga; «[testo]» in fondo alla riga = manda solo la "
+                        "trascrizione in Leggi). Ogni video nuovo viene trascritto e mandato al "
                         "Feed di HAL con il testo allegato. I file non vengono toccati.",
                         "HAL Agent")
             video.trigger_now()   # prima lettura subito
