@@ -360,6 +360,7 @@ class TranscriptLoop:
         from . import transcripts
         last = 0.0
         last_watch = 0.0
+        last_brake_note = -1e9
         while not self._stop.is_set():
             conf = cfg.load_config()
             tr = conf.get("transcripts", {}) or {}
@@ -385,6 +386,10 @@ class TranscriptLoop:
                 last = now
                 try:
                     res = transcripts.poll_and_run_once(conf, on_progress=self._status)
+                    # pausa di YouTube: lo si dice al sito una volta ogni mezz'ora, non ogni minuto
+                    if res.get("braked") and now - last_brake_note >= 1800:
+                        last_brake_note = now
+                        remote.send_status(conf, transcripts.brake_label())
                     if res.get("jobs") or res.get("fallback"):
                         msg = (f"Trascrizioni: {res.get('done',0)} con sottotitoli, "
                                f"{res.get('none',0)} senza, {res.get('error',0)} da ritentare")

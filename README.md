@@ -126,6 +126,23 @@ stessa sintassi e qualche esempio. Se lo cancelli non torna.
 Il loop «Trascrizioni per il sito» gira sempre (una GET al minuto a vuoto) e si può spegnere
 dal menu; gli Scout trascrivono comunque i propri canali durante la raccolta.
 
+### Il freno (quando YouTube dice «troppe richieste»)
+
+Ogni tanto YouTube risponde **429 / IpBlocked** al download dei sottotitoli: non è colpa del
+video, è il tuo indirizzo che ha chiesto troppo — e insistere allunga il castigo. Al primo
+blocco l'agente **si ferma da solo**: mezz'ora, poi un'ora, due, quattro, sei. Durante la
+pausa:
+
+- non chiede più sottotitoli a YouTube (risponde subito, senza rete);
+- **non prende lavori dalla coda** del sito: restano lì, li farà dopo — così non si bruciano
+  i tentativi e non si finisce su Gemini senza volerlo;
+- il fallback Gemini continua, perché lo esegue il server col suo indirizzo.
+
+La **prima trascrizione riuscita toglie il freno**. Nel menu compare, solo mentre la pausa è
+in corso, la voce «⏸ YouTube in pausa ancora N min — riprova ora»: cliccandola si riparte
+subito (se YouTube blocca di nuovo, la pausa riprende più lunga). Lo stato sta in
+`~/.hal-agent/state.json`, sotto `transcripts.brake_*`.
+
 ## Il Pannello (dalla menu-bar: «Apri pannello…», o click sullo stato)
 Finestra unica per capire cosa sta facendo l'agente, senza aprire il JSON:
 

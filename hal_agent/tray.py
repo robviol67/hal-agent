@@ -170,6 +170,29 @@ def run_tray():
             icon.notify("Trascrizioni spente: la coda del sito non viene più letta "
                         "(gli Scout continuano a trascrivere i loro canali).", "HAL Agent")
 
+    def _brake_label():
+        """Voce del menu che compare solo quando YouTube ci ha messo in pausa."""
+        from . import transcripts as tmod
+        b = tmod.brake_status()
+        if not b["active"]:
+            return "YouTube: nessuna pausa"
+        mins = int(b["left"] // 60) + 1
+        return f"⏸ YouTube in pausa ancora {mins} min — riprova ora"
+
+    def _brake_on():
+        from . import transcripts as tmod
+        return tmod.brake_status()["active"]
+
+    def on_brake_release(icon, item):
+        from . import transcripts as tmod
+        if not tmod.brake_status()["active"]:
+            icon.notify("Nessuna pausa in corso: i sottotitoli si scaricano normalmente.", "HAL Agent")
+            return
+        tmod.brake_release("tolto a mano dal menu")
+        transcripts.trigger_now()
+        icon.notify("Freno tolto: riprovo subito a scaricare i sottotitoli. "
+                    "Se YouTube ci blocca di nuovo, la pausa riparte più lunga.", "HAL Agent")
+
     def on_transcribe_now(icon, item):
         if not (cfg.load_config().get("token")):
             icon.notify("Configura prima il collegamento (server + token).", "HAL Agent")
@@ -380,6 +403,7 @@ def run_tray():
         Item("Trascrizioni per il sito (coda + Gemini)", on_toggle_transcripts,
              checked=lambda item: _transcripts_enabled()),
         Item("Controlla la coda ora", on_transcribe_now),
+        Item(lambda item: _brake_label(), on_brake_release, visible=lambda item: _brake_on()),
         pystray.Menu.SEPARATOR,
         Item("Verifica aggiornamenti…", on_check_updates),
         Item("Avanzate", avanzate),

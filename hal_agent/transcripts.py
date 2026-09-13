@@ -11,10 +11,12 @@ Due lavori, entrambi dall'IP di casa (YouTube blocca i datacenter):
      lo fa il server, qui si fa solo da "sveglia", un video per richiesta.
 """
 import logging
+import time
 import re
 
 import httpx
 
+from . import config as cfg
 from . import telemetry
 
 log = logging.getLogger("hal_agent.transcripts")
@@ -95,6 +97,82 @@ def _join(snippets, paragraph_every: float = 75.0) -> str:
     return "\n\n".join(parts).strip()
 
 
+# ─── Il freno ───────────────────────────────────────────────────────────────
+# Quando YouTube risponde «troppe richieste» (429 / IpBlocked) l'errore non è di
+# un video: è dell'indirizzo di casa, e insistere allunga il castigo. Al primo
+# blocco l'agente si ferma per mezz'ora, poi un'ora, poi due, fino a sei; la
+# prima trascrizione riuscita azzera tutto. Durante la pausa non si tocca
+# YouTube e NON si prendono lavori dalla coda: restano lì, li si farà dopo.
+BRAKE_STEPS = (30 * 60, 60 * 60, 2 * 3600, 4 * 3600, 6 * 3600)
+
+# Errori che parlano dell'IP, non del video.
+_BLOCK_ERRORS = {"IpBlocked", "RequestBlocked", "TooManyRequests", "YouTubeRequestFailed",
+                 "IpBlockedError", "RequestBlockedError"}
+
+
+def _is_block_error(exc) -> bool:
+    if _err_names(exc) in _BLOCK_ERRORS:
+        return True
+    t = (str(exc) or "").lower()
+    return "429" in t or "too many requests" in t or "blocking requests" in t
+
+
+def brake_status() -> dict:
+    """{'active','until','level','reason','left'} — 'left' sono i secondi che mancano."""
+    try:
+        st = (cfg.load_state().get("transcripts") or {})
+    except Exception:
+        st = {}
+    until = float(st.get("brake_until", 0) or 0)
+    left = max(0.0, until - time.time())
+    return {"active": left > 0, "until": until, "left": left,
+            "level": int(st.get("brake_level", 0) or 0), "reason": str(st.get("brake_reason", ""))}
+
+
+def brake_label() -> str:
+    """Frase pronta da mostrare (menu, pannello, log). Vuota se il freno non è tirato."""
+    b = brake_status()
+    if not b["active"]:
+        return ""
+    return "YouTube ci ha messo in pausa (troppe richieste): riprovo alle " + \
+           time.strftime("%H:%M", time.localtime(b["until"]))
+
+
+def _brake_pull(detail: str) -> float:
+    """Tira il freno (o lo stringe, se era già tirato). Ritorna i secondi di pausa."""
+    state = cfg.load_state()
+    st = state.setdefault("transcripts", {})
+    level = int(st.get("brake_level", 0) or 0)
+    if float(st.get("brake_until", 0) or 0) <= time.time():
+        pass                                   # pausa scaduta: si riparte dal gradino successivo
+    wait = BRAKE_STEPS[min(level, len(BRAKE_STEPS) - 1)]
+    st["brake_level"] = min(level + 1, len(BRAKE_STEPS) - 1)
+    st["brake_until"] = time.time() + wait
+    st["brake_reason"] = (detail or "troppe richieste")[:200]
+    try:
+        cfg.save_state(state)
+    except Exception as e:
+        log.debug("freno non salvato: %s", e)
+    log.warning("Freno YouTube: pausa di %d minuti (%s)", wait // 60, st["brake_reason"])
+    return wait
+
+
+def brake_release(reason: str = "") -> None:
+    """Toglie il freno: lo fa la prima trascrizione riuscita, o tu dal menu."""
+    state = cfg.load_state()
+    st = state.setdefault("transcripts", {})
+    if not st.get("brake_until") and not st.get("brake_level"):
+        return
+    st["brake_until"] = 0
+    st["brake_level"] = 0
+    st["brake_reason"] = ""
+    try:
+        cfg.save_state(state)
+    except Exception:
+        pass
+    log.info("Freno YouTube tolto%s", (" (" + reason + ")") if reason else "")
+
+
 def get_transcript(video_id: str, languages=PREFERRED_LANGS) -> dict:
     """
     Ritorna {"status": "done"|"none"|"error", "text": str, "lang": str, "detail": str}.
@@ -105,6 +183,10 @@ def get_transcript(video_id: str, languages=PREFERRED_LANGS) -> dict:
     """
     if not YT_AVAILABLE:
         return {"status": "error", "text": "", "lang": "", "detail": "libreria youtube-transcript-api assente"}
+    b = brake_status()
+    if b["active"]:
+        # in pausa: non si chiede niente a YouTube. L'elemento resta da ritentare.
+        return {"status": "error", "text": "", "lang": "", "detail": brake_label()}
     try:
         if hasattr(YouTubeTranscriptApi, "list") and not isinstance(getattr(YouTubeTranscriptApi, "list"), staticmethod):
             api = YouTubeTranscriptApi()
@@ -128,11 +210,15 @@ def get_transcript(video_id: str, languages=PREFERRED_LANGS) -> dict:
             lang = (lang + " auto").strip()
         if not text:
             return {"status": "none", "text": "", "lang": lang, "detail": "sottotitoli vuoti"}
+        brake_release("trascrizione riuscita")   # ha funzionato: il freno non serve più
         return {"status": "done", "text": text, "lang": lang, "detail": ""}
     except Exception as e:
         if _is_none_error(e):
             return {"status": "none", "text": "", "lang": "", "detail": _err_names(e)}
         why = ("%s: %s" % (_err_names(e), str(e).splitlines()[0] if str(e).strip() else "")).strip(": ")
+        if _is_block_error(e):
+            _brake_pull(why)
+            return {"status": "error", "text": "", "lang": "", "detail": brake_label() or why[:200]}
         log.debug("Trascrizione %s fallita: %s", video_id, why)
         return {"status": "error", "text": "", "lang": "", "detail": why[:200]}
 
@@ -184,7 +270,7 @@ def poll_and_run_once(conf: dict, on_progress=None) -> dict:
     poi sveglia il fallback Gemini se c'è qualcosa in attesa.
     Ritorna {"jobs": n, "done": n, "none": n, "error": n, "fallback": n}.
     """
-    res = {"jobs": 0, "done": 0, "none": 0, "error": 0, "fallback": 0}
+    res = {"jobs": 0, "done": 0, "none": 0, "error": 0, "fallback": 0, "braked": False}
     if not conf.get("token"):
         return res
     tr = conf.get("transcripts", {}) or {}
@@ -194,6 +280,18 @@ def poll_and_run_once(conf: dict, on_progress=None) -> dict:
     def prog(m):
         if on_progress:
             on_progress(m)
+
+    # Freno tirato: non si prende nessun lavoro dalla coda (resterebbe «preso» senza
+    # essere fatto) e non si tocca YouTube. Il fallback Gemini invece gira lo stesso:
+    # lo esegue il server, col suo indirizzo, e non c'entra col nostro castigo.
+    b = brake_status()
+    if b["active"]:
+        res["braked"] = True
+        prog(brake_label())
+        res["fallback"] = run_fallback(conf, on_progress=None, max_rounds=int(tr.get("fallback_rounds", 5) or 5))
+        if res["fallback"]:
+            prog(f"Gemini: {res['fallback']} trascritti · {brake_label()}")
+        return res
 
     url = _path(conf)
     try:
