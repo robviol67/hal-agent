@@ -91,6 +91,26 @@ Toglierlo invece non cancella niente di già archiviato.
 
 Serve la migration `/api/migrate_video_text.php` sul sito.
 
+### Playlist
+
+Al posto dei singoli link si può incollare l'indirizzo di una **playlist**: vale per tutti i
+video che contiene, marcatore compreso.
+
+```
+https://youtube.com/playlist?list=PLfGPUS4FpAm9pbXXUGLPWjSN64CvIHfKv  [testo → Guida Claude]
+```
+
+- Niente chiave API: si legge la pagina pubblica della playlist, 100 video per pagina, fino a
+  `playlist_max` (200 di serie).
+- La playlist resta **sotto osservazione**: viene riletta ogni `playlist_refresh_minutes`
+  (60 di serie) — «Leggi gli elenchi ora» la rilegge subito — quindi **i video aggiunti dopo
+  arrivano da soli**. I video tolti dalla playlist restano nel Feed: quello che è arrivato non
+  si cancella da sé.
+- L'invio resta a `max_per_run` video per giro (20 di serie): una playlist lunga entra a
+  scaglioni, non tutta insieme.
+- Un link `watch?v=…&list=…` resta **un video solo**: per prendere tutta la playlist serve
+  l'indirizzo della playlist (quello con `playlist?list=`), o l'id nudo `PL…`.
+
 Il loop «Trascrizioni per il sito» gira sempre (una GET al minuto a vuoto) e si può spegnere
 dal menu; gli Scout trascrivono comunque i propri canali durante la raccolta.
 

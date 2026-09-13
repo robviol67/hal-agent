@@ -43,10 +43,12 @@ cambiare marcatore a un link già mandato lo rimanda) e nel server (url_hash).
 import logging
 import os
 import re
+import time
 
 import httpx
 
 from . import config as cfg
+from . import playlists
 from . import sender
 from . import transcripts
 
@@ -169,15 +171,51 @@ def _read_entries(path: str, text_only=None, project=None) -> list:
             t = (t[:m.start()] + " " + t[m.end():]).strip()
         for tok in t.replace(",", " ").split():
             vid = transcripts.extract_video_id(tok)
-            if vid and vid not in seen:
-                seen.add(vid)
-                out.append({"vid": vid, "text_only": bool(lt), "project": (lp or "")})
+            if vid:
+                if vid not in seen:
+                    seen.add(vid)
+                    out.append({"vid": vid, "playlist": "", "text_only": bool(lt), "project": (lp or "")})
+                continue
+            # indirizzo di una PLAYLIST (o id nudo): vale per tutti i video che contiene.
+            # Un link «watch?v=…&list=…» resta un video solo: c'è il video, si prende quello.
+            plid = playlists.extract_playlist_id(tok)
+            if plid and plid not in seen:
+                seen.add(plid)
+                out.append({"vid": "", "playlist": plid, "text_only": bool(lt), "project": (lp or "")})
     return out
 
 
 def _signature(e: dict) -> str:
     """Come è stato mandato un link: cambiando marcatore cambia la firma e si rimanda."""
     return ("T" if e["text_only"] else "V") + "|" + (e["project"] or "")
+
+
+def _playlist_ids(plid: str, vc: dict, vstate: dict, refresh: bool, prog) -> dict:
+    """
+    Video di una playlist, con una cache nello stato: la playlist si rilegge ogni
+    playlist_refresh_minutes (o subito, se il giro è stato chiesto a mano), così i
+    video aggiunti dopo arrivano da soli senza bussare a YouTube ogni cinque minuti.
+    """
+    cache = vstate.setdefault("playlists", {}) if vstate is not None else {}
+    cached = cache.get(plid) or {}
+    age_ok = (time.time() - float(cached.get("at", 0))) < int(vc.get("playlist_refresh_minutes", 60) or 60) * 60
+    if cached.get("ids") and age_ok and not refresh:
+        return {"ids": list(cached["ids"]), "title": cached.get("title", ""), "error": "", "cached": True}
+
+    limit = int(vc.get("playlist_max", 200) or 200)
+    prog(f"Playlist: lettura di {plid}…")
+    r = playlists.playlist_videos(plid, limit=limit)
+    if not r["ok"]:
+        if cached.get("ids"):      # YouTube non risponde: si va avanti con l'ultimo elenco buono
+            log.warning("Playlist %s non letta (%s): uso l'elenco in cache", plid, r["error"])
+            return {"ids": list(cached["ids"]), "title": cached.get("title", ""), "error": r["error"], "cached": True}
+        return {"ids": [], "title": "", "error": r["error"], "cached": False}
+
+    title = r["title"] or plid
+    prog(f"Playlist «{title}»: {len(r['ids'])} video" + (" (tetto raggiunto)" if r["partial"] else ""))
+    if vstate is not None:
+        cache[plid] = {"at": time.time(), "ids": r["ids"], "title": r["title"]}
+    return {"ids": r["ids"], "title": r["title"], "error": "", "cached": False}
 
 
 def _oembed(video_id: str) -> dict:
@@ -196,8 +234,13 @@ def _oembed(video_id: str) -> dict:
         return {"ok": False, "title": "", "channel": ""}
 
 
-def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dict:
-    """Un giro: legge gli elenchi, trascrive i video nuovi e li manda al Feed."""
+def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False,
+              refresh_playlists: bool = False) -> dict:
+    """
+    Un giro: legge gli elenchi, apre le playlist, trascrive i video nuovi e li
+    manda al Feed. `refresh_playlists` salta la cache delle playlist (è quello
+    che succede quando il giro lo chiedi tu dal menu).
+    """
     conf = conf or cfg.load_config()
     vc = conf.get("video", {}) or {}
 
@@ -206,7 +249,8 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
             on_progress(m)
 
     result = {"files": 0, "links": 0, "new": 0, "text": 0, "sent": 0, "done": 0, "none": 0,
-              "error": 0, "fallback": 0, "folder": vc.get("folder", ""), "ok": True}
+              "error": 0, "fallback": 0, "playlists": 0, "playlist_err": 0,
+              "folder": vc.get("folder", ""), "ok": True}
 
     folder = vc.get("folder") or ""
     if not folder or not os.path.isdir(folder):
@@ -231,23 +275,53 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
     sent_modes = dict(vstate.get("sent_modes", {})) if not dry_run else {}
 
     prog(f"Video: lettura di {folder}…")
-    todo_all, seen = [], set()
+    raw = []
     for path in _iter_files(folder, exts):
         result["files"] += 1
         ft, fp = _folder_spec(folder, path)
-        for e in _read_entries(path, ft, fp):
-            result["links"] += 1
-            vid = e["vid"]
-            if vid in seen:
-                continue
-            already = vid in sent_ids and sent_modes.get(vid, "V|") == _signature(e)
-            if not already:
-                seen.add(vid)
-                todo_all.append(e)
+        raw.extend(_read_entries(path, ft, fp))
+
+    # Le playlist diventano i loro video, che ereditano il marcatore della riga.
+    entries, pl_done, pl_fetched = [], set(), False
+    for e in raw:
+        plid = e.get("playlist") or ""
+        if not plid:
+            entries.append(e)
+            continue
+        if plid in pl_done:
+            continue
+        pl_done.add(plid)
+        result["playlists"] += 1
+        r = _playlist_ids(plid, vc, None if dry_run else vstate, refresh_playlists, prog)
+        if r["error"] and not r["ids"]:
+            result["playlist_err"] += 1
+            prog(f"Playlist {plid}: {r['error']}")
+            continue
+        if not r["cached"]:
+            pl_fetched = True
+        for vid in r["ids"]:
+            entries.append({"vid": vid, "playlist": plid, "text_only": e["text_only"],
+                            "project": e["project"]})
+
+    # la cache delle playlist si salva subito: vale anche se poi non c'è niente da mandare
+    if pl_fetched and not dry_run:
+        cfg.save_state(state)
+
+    todo_all, seen = [], set()
+    for e in entries:
+        result["links"] += 1
+        vid = e["vid"]
+        if not vid or vid in seen:
+            continue
+        already = vid in sent_ids and sent_modes.get(vid, "V|") == _signature(e)
+        if not already:
+            seen.add(vid)
+            todo_all.append(e)
     result["new"] = len(todo_all)
     result["text"] = sum(1 for e in todo_all if e["text_only"])
     if not todo_all:
-        prog(f"Video: nessun link nuovo ({result['links']} in {result['files']} file)")
+        prog(f"Video: nessun link nuovo ({result['links']} in {result['files']} file"
+             + (f", {result['playlists']} playlist" if result["playlists"] else "") + ")")
         return result
     todo = todo_all[:max_per_run]
 

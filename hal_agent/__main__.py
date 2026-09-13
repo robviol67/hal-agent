@@ -136,9 +136,10 @@ def main(argv=None):
         if args.folder:
             conf = dict(conf)
             conf["video"] = {**(conf.get("video") or {}), "folder": args.folder}
-        res = videos.scan_once(conf, dry_run=args.dry_run,
+        res = videos.scan_once(conf, dry_run=args.dry_run, refresh_playlists=True,
                                on_progress=lambda s: logging.getLogger("hal_agent").info(s))
-        print(f"\n→ file {res.get('files',0)}, link {res.get('links',0)}, nuovi {res.get('new',0)}, "
+        print(f"\n→ file {res.get('files',0)}, playlist {res.get('playlists',0)}, "
+              f"link {res.get('links',0)}, nuovi {res.get('new',0)} (solo testo {res.get('text',0)}), "
               f"mandati {res.get('sent',0)}, con sottotitoli {res.get('done',0)}, senza {res.get('none',0)}, "
               f"errori {res.get('error',0)}")
         if not args.once and not args.dry_run:

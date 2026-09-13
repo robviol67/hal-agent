@@ -86,12 +86,16 @@ DEFAULT_CONFIG = {
     # «Solo testo»: sottocartella «Solo testo», riga `#! testo` nel file o marcatore
     # `[testo → Progetto]` in fondo alla riga → di quel video HAL archivia da sola la
     # trascrizione in «Leggi», nel progetto indicato (vedi videos.py).
+    # Nell'elenco si può incollare anche l'indirizzo di una PLAYLIST: vale per tutti i
+    # video che contiene e resta sotto osservazione (i nuovi arrivano da soli).
     "video": {
         "enabled": False,                     # spento di default: si attiva dal menu-bar
         "folder": str(Path.home() / "HAL" / "Video"),  # cartella osservata
         "interval_minutes": 5,                # ogni quanto rilegge gli elenchi
         "agent_name": "Cartella video",       # nome dello Scout con cui compaiono nel Feed
         "max_per_run": 20,                    # video nuovi per giro
+        "playlist_max": 200,                  # tetto di video letti da UNA playlist
+        "playlist_refresh_minutes": 60,       # ogni quanto si rilegge una playlist
         "exts": ["txt", "md", "urls"]
     }
 }

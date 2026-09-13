@@ -403,8 +403,9 @@ class VideoLoop:
     """
     Loop della cartella osservata dei VIDEO (elenchi di link YouTube): se
     video.enabled è true, ogni video.interval_minutes rilegge i file .txt,
-    trascrive i link nuovi e li manda al Feed. Rilegge la config a ogni giro.
-    trigger_now() forza una lettura subito.
+    apre le playlist, trascrive i link nuovi e li manda al Feed. Rilegge la
+    config a ogni giro. trigger_now() forza una lettura subito — e in quel caso
+    le playlist vengono rilette davvero, senza passare dalla cache.
     """
     def __init__(self, on_status=None):
         self._stop = threading.Event()
@@ -419,7 +420,7 @@ class VideoLoop:
             pass
         telemetry.set_status(msg)
 
-    def _scan(self, conf):
+    def _scan(self, conf, refresh_playlists=False):
         from . import videos
         last_remote = [0.0]
         def prog(m):
@@ -428,7 +429,7 @@ class VideoLoop:
             if now - last_remote[0] >= 20:
                 last_remote[0] = now
                 remote.send_status(conf, m)
-        res = videos.scan_once(conf, on_progress=prog)
+        res = videos.scan_once(conf, on_progress=prog, refresh_playlists=refresh_playlists)
         if res.get("new") or not res.get("ok"):
             remote.send_status(conf, f"Video: {res.get('sent',0)} mandati al Feed, "
                                      f"{res.get('none',0)} senza sottotitoli")
@@ -452,7 +453,7 @@ class VideoLoop:
             if forced or (enabled and now - last_scan >= interval):
                 last_scan = now
                 try:
-                    self._scan(conf)
+                    self._scan(conf, refresh_playlists=forced)
                 except Exception as e:
                     log.error("Video: giro fallito: %s", e)
                     self._status(f"Video: errore {e}")
