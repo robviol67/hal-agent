@@ -27,15 +27,10 @@ INTERVAL_CHOICES = [
 ]
 
 
-def _make_icon_image(color=(24, 95, 165)):
-    """Icona semplice generata al volo (cerchio con H)."""
-    from PIL import Image, ImageDraw
-    size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((4, 4, size - 4, size - 4), fill=color)
-    d.text((size // 2 - 9, size // 2 - 12), "H", fill="white")
-    return img
+def _make_icon_image():
+    """Il marchio di HAL (quadrato scuro, A bianca, pallino rosso), disegnato al volo."""
+    from .branding import hal_mark
+    return hal_mark(64)
 
 
 def _open_config_file():

@@ -10,6 +10,7 @@ import logging
 import os
 
 from . import config as cfg
+from . import uikit
 
 log = logging.getLogger("hal_agent.folder_picker")
 

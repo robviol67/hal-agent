@@ -1,6 +1,7 @@
 # PyInstaller spec — costruisce "HAL Agent" (tray app, senza console).
 # Uso:  pyinstaller HAL_Agent.spec   (su Mac produce .app, su Windows produce .exe)
 # -*- mode: python ; coding: utf-8 -*-
+import os
 import sys
 import re
 from pathlib import Path
@@ -48,7 +49,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(
         exe,
         name='HAL Agent.app',
-        icon=None,
+        icon=os.path.join(SPECPATH, 'assets', 'HAL.icns'),   # il marchio di HAL
         bundle_identifier='it.hal.agent',
         info_plist={
             'LSUIElement': True,   # app "accessory": solo menu-bar, niente Dock

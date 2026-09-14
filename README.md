@@ -143,6 +143,23 @@ in corso, la voce «⏸ YouTube in pausa ancora N min — riprova ora»: cliccan
 subito (se YouTube blocca di nuovo, la pausa riprende più lunga). Lo stato sta in
 `~/.hal-agent/state.json`, sotto `transcripts.brake_*`.
 
+## Le finestre (pannello, ponte LLM, scelta cartella)
+
+L'agente è un'app di **menu-bar** (`LSUIElement`): niente icona nel Dock. Le finestre di un
+processo così nascono **dietro** a tutte le altre e macOS non le disegna nemmeno — restano
+rettangoli grigi. `hal_agent/uikit.py` rimedia: appena la finestra esiste promuove il
+processo ad app normale (`NSApplicationActivationPolicyRegular`, via ctypes: nessuna
+dipendenza in più), la porta davanti e le dà una spintarella di geometria che costringe Tk
+a ridisegnare.
+
+⚠️ **L'ordine conta**: toccare `NSApplication` *prima* di creare la finestra fa terminare il
+processo — Tk installa una propria sottoclasse (`TKApplication`) e trovarne una già fatta gli
+fa lanciare `-[NSApplication _setup:]: unrecognized selector`. Prima Tk, poi AppKit.
+
+Per controllare come stanno le cose: `python -m hal_agent uidiag` (funziona anche sul
+bundle: `"HAL Agent.app/Contents/MacOS/HAL Agent" uidiag`) stampa politica di attivazione
+prima e dopo, e dice se la finestra è sopravvissuta.
+
 ## Il Pannello (dalla menu-bar: «Apri pannello…», o click sullo stato)
 Finestra unica per capire cosa sta facendo l'agente, senza aprire il JSON:
 

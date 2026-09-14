@@ -21,6 +21,7 @@ from . import __version__
 from . import config as cfg
 from . import remote
 from . import telemetry
+from . import uikit
 from .config_window import PRESETS, fetch_models, test_generation, _open_json_fallback
 
 log = logging.getLogger("hal_agent.panel")
@@ -619,21 +620,9 @@ def open_panel():
 
     refresh()
 
-    root.lift()
-    root.attributes("-topmost", True)
-    root.after(400, lambda: root.attributes("-topmost", False))
-
-    def _nudge():
-        # I Tk vecchi (8.5, quello di sistema di macOS) disegnano il contenuto
-        # solo dopo un ridimensionamento: senza questa spinta di un pixel la
-        # finestra resta grigia e vuota. Sui Tk moderni non si nota.
-        try:
-            w, h = root.winfo_width(), root.winfo_height()
-            root.geometry("%dx%d" % (w + 1, h))
-            root.after(150, lambda: root.geometry("%dx%d" % (w, h)))
-        except Exception:
-            pass
-    root.after(250, _nudge)
+    # Davanti a tutto e disegnata: l'agente è un'app di menu-bar, e le finestre
+    # di un processo «accessory» nascono dietro le altre e restano grigie.
+    uikit.bring_to_front(root)
 
     root.mainloop()
 

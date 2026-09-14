@@ -14,6 +14,7 @@ import webbrowser
 import httpx
 
 from . import config as cfg
+from . import uikit
 
 log = logging.getLogger("hal_agent.configui")
 
@@ -231,4 +232,5 @@ def open_config_window():
     root.lift()
     root.attributes("-topmost", True)
     root.after(300, lambda: root.attributes("-topmost", False))
+    uikit.bring_to_front(root)
     root.mainloop()

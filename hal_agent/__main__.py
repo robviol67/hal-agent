@@ -43,6 +43,7 @@ def main(argv=None):
 
     sub.add_parser("tray", help="Interfaccia barra di sistema")
     sub.add_parser("panel", help="Pannello: Scout collegati, invii, ponte LLM, impostazioni")
+    sub.add_parser("uidiag", help="Diagnosi finestre: perché una finestra non viene davanti")
     sub.add_parser("config", help="Percorso del file di configurazione")
     sub.add_parser("configui", help="Finestra di configurazione del Ponte LLM")
     pf = sub.add_parser("pickfolder", help="Scegli la cartella osservata (finestra di sistema)")
@@ -89,6 +90,46 @@ def main(argv=None):
     if args.cmd == "configui":
         from . import config_window
         config_window.open_config_window()
+        return 0
+
+    if args.cmd == "uidiag":
+        # ⚠️ Tk installa una PROPRIA sottoclasse di NSApplication: chi tocca
+        # `sharedApplication` prima di lui fa terminare il processo
+        # («-[NSApplication _setup:]: unrecognized selector»). Quindi qui si
+        # crea prima la finestra, e solo dopo si guarda com'è messa l'app.
+        import ctypes.util
+        from . import uikit
+        print("piattaforma:", sys.platform, "| dentro il bundle:", getattr(sys, "frozen", False))
+        print("libobjc:", ctypes.util.find_library("objc"))
+        print("AppKit :", ctypes.util.find_library("AppKit"))
+        try:
+            import tkinter as tk
+            root = tk.Tk()
+            root.title("HAL Agent — diagnosi finestre")
+            root.geometry("360x160")
+            root.update_idletasks()
+        except Exception as e:
+            print("Tk non parte:", type(e).__name__, e)
+            return 1
+
+        objc, app = uikit._nsapp()
+        def pol():
+            if not app:
+                return "?"
+            import ctypes as C
+            send = objc.objc_msgSend
+            send.restype = C.c_long; send.argtypes = [C.c_void_p, C.c_void_p]
+            return send(app, objc.sel_registerName(b"activationPolicy"))
+        print("NSApplication raggiungibile:", bool(app))
+        print("politica con la finestra creata:", pol(), "(0 = app normale, 1 = accessoria)")
+        print("macos_become_app ->", uikit.macos_become_app())
+        print("politica dopo:", pol())
+        uikit.macos_activate()
+        root.update_idletasks()
+        print("finestra ancora viva:", bool(root.winfo_exists()))
+        root.after(1500, root.destroy)
+        root.mainloop()
+        print("fine: nessun crash.")
         return 0
 
     if args.cmd == "panel":
