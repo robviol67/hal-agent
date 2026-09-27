@@ -69,7 +69,7 @@ def build_paste_frame(parent, root, standalone: bool = False):
 
     ttk.Label(frm, text="Progetto (facoltativo)").grid(column=0, row=6, sticky="w", pady=(10, 0))
     v_proj = tk.StringVar(value="")
-    cb = ttk.Combobox(frm, textvariable=v_proj, values=prefs["projects"], width=34)
+    cb = ttk.Combobox(frm, textvariable=v_proj, values=prefs["projects"], width=28)
     cb.grid(column=1, row=6, sticky="w", pady=(10, 0), padx=(8, 0))
     ttk.Label(frm, text="se non esiste, HAL lo crea", style="Muted.TLabel")\
         .grid(column=2, row=6, sticky="w", pady=(10, 0), padx=(8, 0))
@@ -210,7 +210,7 @@ def open_paste_window():
     cfg.load_config()
     root = tk.Tk()
     root.title("HAL Agent — Incolla video")
-    root.geometry("600x560")
+    root.geometry("680x580")
     root.minsize(520, 460)
     try:
         style = ttk.Style()
