@@ -4,6 +4,7 @@ Uso:
   python -m hal_agent run [--once] [--dry-run] [--interval N]   raccolta (loop o singolo giro)
   python -m hal_agent tray                                      interfaccia barra di sistema
   python -m hal_agent panel                                     pannello (Scout, invii, ponte, config)
+  python -m hal_agent paste                                     casella «Incolla video» → Feed
   python -m hal_agent config                                    stampa il percorso del config
   python -m hal_agent bridge [--once]                           ponte LLM locale (polling job)
   python -m hal_agent library [--once] [--dry-run]              cartella osservata → Frontiera HAL
@@ -43,6 +44,7 @@ def main(argv=None):
 
     sub.add_parser("tray", help="Interfaccia barra di sistema")
     sub.add_parser("panel", help="Pannello: Scout collegati, invii, ponte LLM, impostazioni")
+    sub.add_parser("paste", help="Casella «Incolla video»: link YouTube → Feed, senza la cartella")
     sub.add_parser("uidiag", help="Diagnosi finestre: perché una finestra non viene davanti")
     sub.add_parser("config", help="Percorso del file di configurazione")
     sub.add_parser("configui", help="Finestra di configurazione del Ponte LLM")
@@ -135,6 +137,11 @@ def main(argv=None):
     if args.cmd == "panel":
         from . import panel_window
         panel_window.open_panel()
+        return 0
+
+    if args.cmd == "paste":
+        from . import paste_window
+        paste_window.open_paste_window()
         return 0
 
     if args.cmd == "pickfolder":

@@ -262,6 +262,12 @@ def open_panel():
                             "(Se l'agente nella barra in alto non è in esecuzione, "
                             "la richiesta resta in attesa.)")
 
+    # ═══ TAB — INCOLLA VIDEO ═══════════════════════════════════════════════
+    # la stessa casella della voce «Incolla un video YouTube…» del menu
+    from .paste_window import build_paste_frame
+    tab_paste, _paste_busy = build_paste_frame(nb, root)
+    nb.add(tab_paste, text="Incolla video")
+
     # ═══ TAB 2 — INVII ══════════════════════════════════════════════════════
     tab_runs = ttk.Frame(nb, padding=10)
     nb.add(tab_runs, text="Invii recenti")

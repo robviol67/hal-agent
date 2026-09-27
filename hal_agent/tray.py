@@ -305,6 +305,12 @@ def run_tray():
         if not _open_ui("panel", icon=icon):
             _open_config_file()
 
+    def on_paste_video(icon, item):
+        if not (cfg.load_config().get("token")):
+            icon.notify("Configura prima il collegamento (server + token).", "HAL Agent")
+            return
+        _open_ui("paste", icon=icon)
+
     def on_configure_bridge(icon, item):
         if not _open_ui("configui", icon=icon):
             _open_config_file()
@@ -372,6 +378,7 @@ def run_tray():
         pystray.Menu.SEPARATOR,
         Item(lambda item: f"Stato: {status['text']}", on_status),
         Item("Apri pannello…", on_open_panel, default=True),
+        Item("Incolla un video YouTube…", on_paste_video),
         Item("Raccogli ora", on_run_now),
         Item("Frequenza raccolta", freq_menu),
         Item("Ponte LLM (modello locale)", on_toggle_bridge,

@@ -145,7 +145,11 @@ def _read_entries(path: str, text_only=None, project=None) -> list:
     except OSError as e:
         log.debug("file non leggibile %s: %s", path, e)
         return []
+    return parse_lines(lines, text_only, project)
 
+
+def parse_lines(lines, text_only=None, project=None) -> list:
+    """Le righe di un elenco (file o testo incollato) → [{'vid', 'playlist', 'text_only', 'project'}]."""
     # 1° passaggio: le direttive del file (valgono ovunque siano scritte)
     for line in lines:
         t = line.strip()
@@ -304,6 +308,33 @@ def _oembed(video_id: str) -> dict:
         return {"ok": False, "title": "", "channel": ""}
 
 
+def _make_item(e: dict, agent_name: str):
+    """Un video pronto per l'ingest: titolo e canale (oEmbed) + sottotitoli. → (item, trascrizione)."""
+    vid = e["vid"]
+    meta = _oembed(vid)
+    t = transcripts.get_transcript(vid)
+    excerpt = (t["text"][:500] + "…") if len(t["text"]) > 500 else t["text"]
+    item = {
+        "title": meta["title"] or ("Video " + vid),
+        "excerpt": excerpt,
+        "url": transcripts.watch_url(vid),
+        "source": "youtube",
+        "published": "",
+        "channel": meta["channel"],
+        "author": "",
+        "agent": agent_name,
+        "transcript": t["text"],
+        "transcript_status": t["status"],
+        "transcript_detail": t["detail"],
+        # marcatori dell'elenco: «solo testo» e progetto (lib/videotext.php sul server)
+        "text_only": bool(e["text_only"]),
+        "project": e["project"],
+        "_vid": vid,
+        "_sig": _signature(e),
+    }
+    return item, t
+
+
 def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False,
               refresh_playlists: bool = False) -> dict:
     """
@@ -401,29 +432,10 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False,
     for i, e in enumerate(todo):
         vid = e["vid"]
         prog(f"Video: {i + 1}/{len(todo)} — {vid}" + (" (solo testo)" if e["text_only"] else ""))
-        meta = _oembed(vid)
-        title = meta["title"] or ("Video " + vid)
-        t = transcripts.get_transcript(vid)
+        item, t = _make_item(e, agent_name)
         result[t["status"]] = result.get(t["status"], 0) + 1
-        excerpt = (t["text"][:500] + "…") if len(t["text"]) > 500 else t["text"]
-        items.append({
-            "title": title,
-            "excerpt": excerpt,
-            "url": transcripts.watch_url(vid),
-            "source": "youtube",
-            "published": "",
-            "channel": meta["channel"],
-            "author": "",
-            "agent": agent_name,
-            "transcript": t["text"],
-            "transcript_status": t["status"],
-            "transcript_detail": t["detail"],
-            # marcatori dell'elenco: HAL archivia da solo il testo in «Leggi»
-            "text_only": bool(e["text_only"]),
-            "project": e["project"],
-            "_vid": vid,
-            "_sig": _signature(e),
-        })
+        title = item["title"]
+        items.append(item)
         if dry_run:
             mode = "solo testo" if e["text_only"] else "video"
             if e["project"]:
@@ -464,4 +476,147 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False,
     log.info("Video: file=%d link=%d nuovi=%d (solo testo=%d) inviati=%d done=%d none=%d err=%d",
              result["files"], result["links"], result["new"], result["text"], result["sent"],
              result["done"], result["none"], result["error"])
+    return result
+
+
+# --- link incollati a mano (finestra «Incolla video») -----------------------
+PASTE_AGENT_NAME = "Incollati nell'agente"
+PASTE_MAX = 50          # video per pressione di «Manda»: il resto al giro dopo
+PASTE_BATCH = 10        # invii a pacchetti: se la finestra si chiude, il fatto resta fatto
+
+
+def _remember_sent(items: list) -> None:
+    """Segna nello stato i video mandati. Rilegge lo stato appena prima di scrivere:
+    il processo della menu-bar lo tocca anche lui, e così non ci si pesta i piedi."""
+    state = cfg.load_state()
+    vstate = state.setdefault("video", {})
+    sent = list(vstate.get("sent_ids", []))
+    modes = dict(vstate.get("sent_modes", {}))
+    known = set(sent)
+    for it in items:
+        if it["_vid"] not in known:
+            sent.append(it["_vid"])
+            known.add(it["_vid"])
+        modes[it["_vid"]] = it["_sig"]
+    keep = sent[-20000:]
+    vstate["sent_ids"] = keep
+    vstate["sent_modes"] = {v: modes[v] for v in keep if v in modes}
+    cfg.save_state(state)
+
+
+def remember_paste_choice(text_only: bool, project: str) -> None:
+    """L'ultima scelta della finestra e i progetti usati di recente (per la tendina)."""
+    state = cfg.load_state()
+    ps = state.setdefault("video", {}).setdefault("paste", {})
+    ps["text_only"] = bool(text_only)
+    project = (project or "").strip()
+    if project:
+        recent = [p for p in ps.get("projects", []) if p.lower() != project.lower()]
+        ps["projects"] = [project] + recent[:14]
+    cfg.save_state(state)
+
+
+def paste_prefs() -> dict:
+    ps = (cfg.load_state().get("video") or {}).get("paste") or {}
+    return {"text_only": bool(ps.get("text_only")), "projects": list(ps.get("projects") or [])}
+
+
+def send_pasted(text: str, text_only: bool = False, project: str = "", conf: dict = None,
+                on_progress=None, resend: bool = False) -> dict:
+    """
+    Manda al Feed i link incollati nella finestra, senza passare dalla cartella.
+    Stessa sintassi degli elenchi (playlist, `[testo → Progetto]` sulla riga), ma
+    di solito basta incollare: la scelta «solo testo» e il progetto della finestra
+    valgono per tutto. Un video già mandato nello stesso modo si salta, a meno di
+    `resend`. Il fallback Gemini lo fa il giro delle trascrizioni della menu-bar.
+    """
+    conf = conf or cfg.load_config()
+    vc = conf.get("video", {}) or {}
+
+    def prog(m):
+        if on_progress:
+            on_progress(m)
+
+    result = {"links": 0, "new": 0, "skipped": 0, "left": 0, "sent": 0, "done": 0, "none": 0,
+              "error": 0, "playlists": 0, "playlist_err": 0, "ok": True, "error_msg": ""}
+    if not conf.get("token"):
+        result.update(ok=False, error_msg="Manca il collegamento a HAL (server + token): "
+                                          "impostalo nel pannello, scheda «Collegamento».")
+        return result
+
+    entries_raw = parse_lines((text or "").splitlines(), bool(text_only), (project or "").strip() or None)
+    if not entries_raw:
+        result.update(ok=False, error_msg="Non trovo link YouTube in quello che hai incollato.")
+        return result
+
+    state = cfg.load_state()
+    vstate = state.setdefault("video", {})
+    entries, pl_done = [], set()
+    for e in entries_raw:
+        plid = e.get("playlist") or ""
+        if not plid:
+            entries.append(e)
+            continue
+        if plid in pl_done:
+            continue
+        pl_done.add(plid)
+        result["playlists"] += 1
+        r = _playlist_ids(plid, vc, vstate, True, prog)
+        if r["error"] and not r["ids"]:
+            result["playlist_err"] += 1
+            prog(f"Playlist {plid}: {r['error']}")
+            continue
+        for vid in r["ids"]:
+            entries.append({"vid": vid, "playlist": plid, "text_only": e["text_only"], "project": e["project"]})
+    if pl_done:
+        # la cache delle playlist: rilette le altre modifiche, si aggiunge solo quella
+        fresh = cfg.load_state()
+        fresh.setdefault("video", {})["playlists"] = {**(fresh["video"].get("playlists") or {}),
+                                                      **(vstate.get("playlists") or {})}
+        cfg.save_state(fresh)
+
+    sent_ids = set(vstate.get("sent_ids", []))
+    sent_modes = vstate.get("sent_modes", {}) or {}
+    todo, seen = [], set()
+    for e in entries:
+        vid = e["vid"]
+        if not vid or vid in seen:
+            continue
+        seen.add(vid)
+        result["links"] += 1
+        if not resend and vid in sent_ids and sent_modes.get(vid, "V|") == _signature(e):
+            result["skipped"] += 1
+            continue
+        todo.append(e)
+    result["new"] = len(todo)
+    if not todo:
+        prog("Niente di nuovo: questi video HAL li ha già ricevuti così.")
+        return result
+    if len(todo) > PASTE_MAX:
+        result["left"] = len(todo) - PASTE_MAX
+        todo = todo[:PASTE_MAX]
+
+    agent_name = str(vc.get("paste_agent_name") or PASTE_AGENT_NAME)
+    for start in range(0, len(todo), PASTE_BATCH):
+        chunk, items = todo[start:start + PASTE_BATCH], []
+        for i, e in enumerate(chunk, start + 1):
+            prog(f"{i}/{len(todo)} — {e['vid']}: titolo e sottotitoli…")
+            item, t = _make_item(e, agent_name)
+            result[t["status"]] = result.get(t["status"], 0) + 1
+            items.append(item)
+            prog(f"{i}/{len(todo)} — {item['title'][:70]}"
+                 + {"done": " ✓ trascritto", "none": " · senza sottotitoli (ci pensa Gemini)",
+                    "error": " · sottotitoli non scaricati ora (si riprova)"}.get(t["status"], ""))
+        res = sender.send([{k: v for k, v in it.items() if not k.startswith("_")} for it in items], conf)
+        if not res.get("ok"):
+            result.update(ok=False, error_msg="Invio a HAL fallito: " + str(res.get("error", ""))[:200])
+            break
+        _remember_sent(items)
+        result["sent"] += len(items)
+
+    if result["none"] and not (conf.get("transcripts") or {}).get("enabled", True):
+        # la menu-bar non sveglia Gemini (trascrizioni spente): lo si fa qui
+        transcripts.run_fallback(conf, on_progress=prog, max_rounds=result["none"])
+    log.info("Incollati: link=%d mandati=%d saltati=%d done=%d none=%d err=%d",
+             result["links"], result["sent"], result["skipped"], result["done"], result["none"], result["error"])
     return result
