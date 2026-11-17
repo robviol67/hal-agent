@@ -80,6 +80,16 @@ DEFAULT_CONFIG = {
         "fallback_rounds": 5,                 # max video Gemini per giro (uno per richiesta)
         "watch_minutes": 20                   # ogni quanto si sveglia il sito per playlist/canali sorvegliati
     },
+    # Conversioni su richiesta (dalla v0.7.0): HAL chiede all'agente il Markdown di
+    # documenti GIÀ nell'Archivio che il server non sa leggere (PDF, RTF) — per
+    # esempio quando Callimaco deve leggere un PDF, o con «↻ Riconverti con
+    # l'agente». L'agente scarica il file, lo converte (docmd.py) e rimanda il
+    # Markdown. Acceso di default: lavora solo se c'è qualcosa in coda.
+    "convert": {
+        "enabled": True,
+        "poll_path": "/api/agent/convert",
+        "poll_seconds": 60                    # ogni quanto guarda la coda
+    },
     # Capability «Video»: la terza cartella osservata. Dentro NON ci vanno file da
     # caricare ma ELENCHI DI LINK YouTube (file .txt, un link per riga, # = commento).
     # Ogni video nuovo viene trascritto (sottotitoli) e mandato al Feed con la

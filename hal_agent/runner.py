@@ -417,6 +417,61 @@ class TranscriptLoop:
         self._stop.set()
 
 
+class ConvertLoop:
+    """
+    Conversioni su richiesta (v0.7.0): ogni convert.poll_seconds chiede a HAL se
+    ci sono documenti dell'Archivio da convertire (PDF, RTF…) e li evade
+    (convert.py). Se ha trovato lavoro ricontrolla subito: una coda di dieci PDF
+    non deve aspettare dieci minuti.
+    """
+    def __init__(self, on_status=None):
+        self._stop = threading.Event()
+        self._thread = None
+        self._trigger = threading.Event()
+        self.on_status = on_status or (lambda s: None)
+
+    def _status(self, msg):
+        try:
+            self.on_status(msg)
+        except Exception:
+            pass
+        telemetry.set_status(msg)
+
+    def _run(self):
+        from . import convert
+        self._stop.wait(8)          # lascia partire il resto dell'app
+        while not self._stop.is_set():
+            conf = cfg.load_config()
+            c = conf.get("convert", {}) or {}
+            wait = max(20, int(c.get("poll_seconds", 60)))
+            forced = self._trigger.is_set()
+            if forced:
+                self._trigger.clear()
+            if c.get("enabled", True) or forced:
+                try:
+                    res = convert.run_once(conf, on_progress=self._status)
+                    if res.get("jobs"):
+                        remote.send_status(conf, f"Conversioni: {res.get('done', 0)} pronte, {res.get('failed', 0)} non riuscite")
+                        wait = 3
+                except Exception as e:
+                    log.error("Conversioni: giro fallito: %s", e)
+            self._trigger.wait(wait)
+
+    def trigger_now(self):
+        self._trigger.set()
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._trigger.set()
+
+
 class VideoLoop:
     """
     Loop della cartella osservata dei VIDEO (elenchi di link YouTube): se

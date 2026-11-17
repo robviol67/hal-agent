@@ -9,7 +9,7 @@ import webbrowser
 
 from . import config as cfg
 from . import __version__
-from .runner import Loop, BridgeLoop, LibraryLoop, DocumentsLoop, TranscriptLoop, VideoLoop
+from .runner import Loop, BridgeLoop, LibraryLoop, DocumentsLoop, TranscriptLoop, VideoLoop, ConvertLoop
 
 log = logging.getLogger("hal_agent.tray")
 
@@ -81,6 +81,7 @@ def run_tray():
     documents = DocumentsLoop(on_status=lambda s: status.__setitem__("text", s))
     transcripts = TranscriptLoop(on_status=lambda s: status.__setitem__("text", s))
     video = VideoLoop(on_status=lambda s: status.__setitem__("text", s))
+    converter = ConvertLoop(on_status=lambda s: status.__setitem__("text", s))
 
     def _bridge_enabled():
         return bool((cfg.load_config().get("llm_bridge") or {}).get("enabled"))
@@ -359,6 +360,7 @@ def run_tray():
         documents.stop()
         transcripts.stop()
         video.stop()
+        converter.stop()
         icon.stop()
 
     freq_menu = pystray.Menu(*[
@@ -421,4 +423,5 @@ def run_tray():
     documents.start()
     transcripts.start()
     video.start()
+    converter.start()
     icon.run()

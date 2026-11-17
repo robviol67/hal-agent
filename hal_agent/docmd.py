@@ -23,7 +23,11 @@ Formati
     epub  ordine dello spine, un capitolo per file, h1-h6 → titoli
     rtf   parser minimo best-effort (escape \\'xx cp1252 e \\uNNNN)
     txt   lettura diretta con rilevamento codifica; il .md passa così com'è
-    pdf   NON supportato qui: lo indicizza il server (o il browser dell'utente)
+    pdf   (dalla v0.7.0, solo macOS) PDFKit del sistema: il testo di ogni pagina,
+          sotto un titoletto «## Pagina N», con le righe spezzate ricucite in
+          paragrafi. Né il server né l'agente prima lo sapevano fare: restava solo
+          il browser («Prepara per l'AI»). I PDF scansionati (solo immagini)
+          non hanno testo: tornano vuoti con il motivo.
 """
 import html
 import logging
@@ -42,7 +46,7 @@ MAX_CHARS = 400_000
 TRUNCATED = "\n\n…(testo troncato)"
 
 # estensioni per cui sappiamo produrre Markdown
-SUPPORTED = ("docx", "epub", "rtf", "txt", "md", "markdown", "text")
+SUPPORTED = ("docx", "epub", "rtf", "txt", "md", "markdown", "text", "pdf")
 
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"[ \t\u00a0]+")
@@ -367,6 +371,87 @@ def _rtf_md(path: str) -> str:
     return "\n".join(lines)
 
 
+# ─────────────────────────────── pdf ───────────────────────────────────
+# fine frase: dopo questi caratteri la riga chiude un paragrafo
+_PDF_END = tuple('.:;!?»"”)')
+
+
+def _pdf_join(lines: list) -> list:
+    """Ricuce le righe di una pagina in paragrafi.
+
+    PDFKit restituisce il testo riga per riga, così come è impaginato. Una riga
+    che finisce con il trattino e una che continua in minuscolo si uniscono; una
+    riga che non chiude la frase e la successiva che parte in minuscolo pure.
+    Tutto il resto (titoli, voci di tabella, righe brevi) resta su righe proprie:
+    meglio una riga in più che due frasi incollate."""
+    out = []
+    for raw in lines:
+        ln = _WS.sub(" ", raw).strip()
+        if ln.startswith("#"):          # «# Fase …» in una tabella non è un titolo:
+            ln = "＃" + ln[1:]          # cancelletto «largo», che il Markdown non legge come titolo
+        if not ln:
+            if out and out[-1] != "":
+                out.append("")
+            continue
+        if out and out[-1]:
+            prev = out[-1]
+            starts_low = ln[:1].islower()
+            if prev.endswith("-") and len(prev) > 1 and prev[-2].isalpha() and starts_low:
+                out[-1] = prev[:-1] + ln
+                continue
+            if starts_low and not prev.endswith(_PDF_END) and len(prev) > 40:
+                out[-1] = prev + " " + ln
+                continue
+        out.append(ln)
+    # a capo doppio dopo le righe che chiudono una frase: diventano paragrafi
+    res = []
+    for ln in out:
+        res.append(ln)
+        if ln.endswith(_PDF_END):
+            res.append("")
+    return res
+
+
+def _pdf_md(path: str) -> str:
+    """Markdown da un PDF con PDFKit (macOS). Una sezione «## Pagina N» per
+    pagina: i numeri di pagina servono a Callimaco per citare il passo («p. 7»)
+    e al Lettore per ritrovarlo."""
+    import sys
+    if sys.platform != "darwin":
+        raise RuntimeError("pdf: la conversione c'è solo su macOS")
+    import Quartz                      # pyobjc-framework-Quartz (già nel bundle)
+    from Foundation import NSURL
+    doc = Quartz.PDFDocument.alloc().initWithURL_(NSURL.fileURLWithPath_(path))
+    if doc is None:
+        raise RuntimeError("PDF illeggibile o protetto")
+    if doc.isLocked():
+        raise RuntimeError("PDF protetto da password")
+    title = ""
+    try:
+        attrs = doc.documentAttributes() or {}
+        title = str(attrs.get("Title") or "").strip()
+    except Exception:
+        title = ""
+    if not title:
+        title = os.path.splitext(os.path.basename(path))[0].replace("_", " ").strip()
+    parts = [f"# {title}"] if title else []
+    total = 0
+    for i in range(doc.pageCount()):
+        page = doc.pageAtIndex_(i)
+        txt = (page.string() if page is not None else None) or ""
+        txt = str(txt).replace("\r\n", "\n").replace("\r", "\n").replace("\u00ad", "")
+        if not txt.strip():
+            continue
+        body = "\n".join(_pdf_join(txt.split("\n"))).strip()
+        parts.append(f"## Pagina {i + 1}\n\n{body}")
+        total += len(body)
+        if total > MAX_CHARS:
+            break
+    if total == 0:
+        raise RuntimeError("nessun testo: il PDF è fatto di immagini (scansione)")
+    return "\n\n".join(parts)
+
+
 # ──────────────────────────── txt / md ─────────────────────────────────
 def _text_md(path: str, ext: str) -> str:
     """Testo semplice. Il .md passa così com'è (è già Markdown: non lo tocchiamo),
@@ -385,8 +470,6 @@ def convert_to_markdown(path: str) -> tuple:
     Non solleva eccezioni: chi chiama deve poter caricare il file comunque.
     """
     ext = os.path.splitext(path)[1].lower().lstrip(".")
-    if ext == "pdf":
-        return "", "pdf: la conversione la fa il server"
     if ext not in SUPPORTED:
         return "", f"{ext or 'senza estensione'}: conversione non supportata dall'agente"
 
@@ -397,6 +480,8 @@ def convert_to_markdown(path: str) -> tuple:
             md = _epub_md(path)
         elif ext == "rtf":
             md = _rtf_md(path)
+        elif ext == "pdf":
+            md = _pdf_md(path)
         else:
             md = _text_md(path, ext)
     except Exception as e:
