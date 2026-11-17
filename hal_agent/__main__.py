@@ -12,6 +12,8 @@ Uso:
   python -m hal_agent video [--once] [--dry-run] [--folder]     elenchi di link YouTube → Feed (trascritti)
   python -m hal_agent transcribe [--once]                       coda trascrizioni del sito (+ fallback Gemini)
   python -m hal_agent transcript <url|id>                       prova: stampa la trascrizione di un video
+  python -m hal_agent convert [--file F]                        conversioni su richiesta di HAL (un giro);
+                                                                con --file stampa il Markdown di un file
 """
 import argparse
 import logging
@@ -77,6 +79,11 @@ def main(argv=None):
 
     pt = sub.add_parser("transcribe", help="Coda trascrizioni del sito (+ fallback Gemini)")
     pt.add_argument("--once", action="store_true", help="Un giro poi esci")
+
+    pc = sub.add_parser("convert", help="Conversioni su richiesta di HAL (PDF, RTF…): un giro")
+    pc.add_argument("--file", help="Prova: converte questo file e stampa il Markdown (niente rete)")
+    pc.add_argument("--server", help="Solo per prova: server al posto di quello in configurazione")
+    pc.add_argument("--token", help="Solo per prova: token al posto di quello in configurazione")
 
     pp = sub.add_parser("transcript", help="Prova: stampa la trascrizione di un video YouTube")
     pp.add_argument("video", help="URL o ID del video")
@@ -159,6 +166,22 @@ def main(argv=None):
             print(f"{t['status']}: {t['detail']}"); return 1
         print(f"# {vid} · {t['lang']} · {len(t['text'])} caratteri\n")
         print(t["text"])
+        return 0
+
+    if args.cmd == "convert":
+        from . import convert, docmd
+        if args.file:
+            md, why = docmd.convert_to_markdown(args.file)
+            print(md if md else f"(nessun Markdown: {why})")
+            return 0 if md else 1
+        conf = cfg.load_config()
+        if args.server:
+            conf["server_url"] = args.server
+        if args.token:
+            conf["token"] = args.token
+        res = convert.run_once(conf, on_progress=lambda s: logging.getLogger("hal_agent").info(s))
+        print(f"\n→ richieste {res.get('jobs', 0)}, convertite {res.get('done', 0)}, non riuscite {res.get('failed', 0)}"
+              + ("" if res.get("ok") else f" — {res.get('error_msg', '')}"))
         return 0
 
     if args.cmd == "transcribe":
