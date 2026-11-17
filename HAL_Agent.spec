@@ -26,7 +26,8 @@ a = Analysis(
     hiddenimports=[
         'pystray._darwin' if sys.platform == 'darwin' else 'pystray._win32',
         'tkinter', 'tkinter.ttk', 'tkinter.messagebox',   # pannello + finestra ponte LLM
-    ],
+        'hal_agent.convert',                              # conversioni su richiesta (import dentro il loop)
+    ] + (['Quartz', 'Foundation'] if sys.platform == 'darwin' else []),   # PDFKit per i PDF (docmd.py)
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
