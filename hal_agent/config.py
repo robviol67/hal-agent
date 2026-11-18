@@ -90,6 +90,15 @@ DEFAULT_CONFIG = {
         "poll_path": "/api/agent/convert",
         "poll_seconds": 60                    # ogni quanto guarda la coda
     },
+    # Capability «Giano» (dalla v0.8.0): la cartella ~/Giano del Mac allineata con
+    # Giano su hal-ai.it. I file nuovi salgono, quelli cambiati chiedono «aggiorna o
+    # duplica?», i cancellati restano in Giano «solo online»; nomi e posizioni li
+    # decide il web (l'agente rinomina e sposta). Vedi giano.py.
+    "giano": {
+        "enabled": False,                     # spento di default: si attiva dal menu-bar
+        "folder": str(Path.home() / "Giano"), # cartella del Mac
+        "interval_seconds": 60                # ogni quanto fa un giro
+    },
     # Capability «Video»: la terza cartella osservata. Dentro NON ci vanno file da
     # caricare ma ELENCHI DI LINK YouTube (file .txt, un link per riga, # = commento).
     # Ogni video nuovo viene trascritto (sottotitoli) e mandato al Feed con la

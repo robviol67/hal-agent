@@ -25,6 +25,11 @@ _SECTIONS = {
         "I Documenti sono attivi: i file nuovi verranno convertiti in Markdown e "
         "inviati all'Archivio. Gli originali restano dove sono.",
     ),
+    "giano": (
+        "Scegli la cartella del Mac da allineare con Giano",
+        "Giano è attivo: i file della cartella salgono a Giano con le sottocartelle; "
+        "nomi e posizioni li decide Giano, i file modificati chiedono «aggiorna o duplica?».",
+    ),
     "video": (
         "Scegli la cartella degli elenchi di video YouTube",
         "I Video sono attivi: metti qui file di testo con un link YouTube per riga. "

@@ -335,6 +335,60 @@ class DocumentsLoop:
         self._stop.set()
 
 
+class GianoLoop:
+    """
+    Loop di Giano (v0.8.0): se giano.enabled, ogni giano.interval_seconds allinea
+    la cartella ~/Giano con Giano su hal-ai.it (giano.sync_once). Rilegge la config a
+    ogni giro; trigger_now() forza un giro subito.
+    """
+    def __init__(self, on_status=None):
+        self._stop = threading.Event()
+        self._thread = None
+        self._trigger = threading.Event()
+        self.on_status = on_status or (lambda s: None)
+        self._busy = threading.Lock()
+
+    def _status(self, msg):
+        try:
+            self.on_status(msg)
+        except Exception:
+            pass
+        telemetry.set_status(msg)
+
+    def _run(self):
+        last = 0.0
+        while not self._stop.is_set():
+            conf = cfg.load_config()
+            g = conf.get("giano", {}) or {}
+            interval = max(20, int(g.get("interval_seconds", 60)))
+            forced = self._trigger.is_set()
+            if forced:
+                self._trigger.clear()
+            if forced or (g.get("enabled") and time.monotonic() - last >= interval):
+                last = time.monotonic()
+                with self._busy:
+                    try:
+                        from . import giano
+                        giano.sync_once(conf, on_progress=self._status)
+                    except Exception as e:
+                        log.error("Giano: giro fallito: %s", e)
+                        self._status(f"Giano: errore {e}")
+            self._stop.wait(3)
+
+    def trigger_now(self):
+        self._trigger.set()
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+
 class TranscriptLoop:
     """
     Loop delle trascrizioni per il sito: ogni transcripts.poll_seconds guarda la
