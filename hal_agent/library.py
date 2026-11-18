@@ -84,10 +84,12 @@ def _server_known(url: str, headers: dict, hashes: list) -> set:
     return known
 
 
-def _upload_one(url: str, headers: dict, path: str, filename: str) -> str:
+def _upload_one(url: str, headers: dict, path: str, filename: str, report=None) -> str:
+    from .progress import ProgressFile, size_of
     try:
         with open(path, "rb") as fh:
-            files = {"file": (filename, fh, "application/octet-stream")}
+            src = ProgressFile(fh, size_of(path), report) if report else fh
+            files = {"file": (filename, src, "application/octet-stream")}
             r = httpx.post(url, files=files, data={"filename": filename}, headers=headers, timeout=180)
         r.raise_for_status()
         return (r.json() or {}).get("status", "stored")
@@ -233,7 +235,8 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
 
             if not already:
                 prog(f"Libreria: invio {i + 1}/{total} — {newname}")
-                status = _upload_one(url, headers, cur, newname)
+                from .progress import reporter, size_of
+                status = _upload_one(url, headers, cur, newname, reporter(f"Libreria: invio {i + 1}/{total} — {newname}", prog, size_of(cur)))
                 if status == "stored":
                     result["uploaded"] += 1
                 elif status == "duplicate":

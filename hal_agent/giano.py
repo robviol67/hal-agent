@@ -111,15 +111,22 @@ class Server:
             while off < size:
                 fh.seek(off)
                 piece = fh.read(cs)
-                rr = self.c.post(u, params={"action": "chunk", "upload_id": uid, "offset": off}, content=piece,
-                                 headers={**self.h, "Content-Type": "application/octet-stream"})
+                base = off
+
+                def stream(piece=piece, base=base):
+                    # a tratti di 256 KB, per una percentuale che scorre (la lunghezza resta dichiarata)
+                    step = 256 * 1024
+                    for i in range(0, len(piece), step):
+                        yield piece[i:i + step]
+                        if on_progress:
+                            on_progress(min(size, base + i + step), size)
+                rr = self.c.post(u, params={"action": "chunk", "upload_id": uid, "offset": off}, content=stream(),
+                                 headers={**self.h, "Content-Type": "application/octet-stream", "Content-Length": str(len(piece))})
                 if rr.status_code == 409:
                     off = int((rr.json() or {}).get("received", off))
                     continue
                 rr.raise_for_status()
                 off = int(rr.json()["received"])
-                if on_progress:
-                    on_progress(off, size)
         f = self.c.post(u + "?action=finish", json={"upload_id": uid, **(extra_finish or {})})
         f.raise_for_status()
         out = f.json()
@@ -131,17 +138,24 @@ class Server:
         f.raise_for_status()
         return f.json()
 
-    def download(self, file_id: int, dest: str) -> str:
+    def download(self, file_id: int, dest: str, on_progress=None) -> str:
         """Scarica la versione corrente in dest (prima in un file temporaneo). Ritorna lo sha256."""
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         tmp = dest + ".giano-tmp"
         h = hashlib.sha256()
         with self.c.stream("GET", f"{self.base}/api/giano/file.php", params={"id": file_id, "dl": 1}) as r:
             r.raise_for_status()
+            total, got, last = int(r.headers.get("content-length") or 0), 0, -1
             with open(tmp, "wb") as fh:
                 for b in r.iter_bytes(1 << 20):
                     fh.write(b)
                     h.update(b)
+                    got += len(b)
+                    if on_progress and total:
+                        pct = int(got * 100 / total)
+                        if pct != last:
+                            last = pct
+                            on_progress(pct)
         os.replace(tmp, dest)
         return h.hexdigest()
 
@@ -288,7 +302,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                 if not os.path.exists(cur):
                     if e.get("request") in ("riscarica", "porta", "aggiorna"):
                         prog(f"Giano: scarico «{e['name']}»")
-                        sha = srv.download(int(fid), target)
+                        sha = srv.download(int(fid), target, lambda p, n=e['name']: prog(f"Giano: scarico «{n}» — {p}%"))
                         register(fid, target_rel, e["version"], sha, target)
                         srv.agent("synced", {"file_id": int(fid), "version": e["version"]})
                         res["downloaded"] += 1
@@ -301,7 +315,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     local_same = True
                 if (e["version"] > r["version"] and local_same) or e.get("request") == "aggiorna":
                     prog(f"Giano: aggiorno «{e['name']}»")
-                    sha = srv.download(int(fid), cur)
+                    sha = srv.download(int(fid), cur, lambda p, n=e['name']: prog(f"Giano: aggiorno «{n}» — {p}%"))
                     register(fid, r["path"], e["version"], sha, cur)
                     srv.agent("synced", {"file_id": int(fid), "version": e["version"]})
                     res["downloaded"] += 1
@@ -315,7 +329,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     if e.get("request"):
                         dest = _free_path(target)
                         prog(f"Giano: porto sul Mac «{e['name']}»")
-                        sha = srv.download(int(fid), dest)
+                        sha = srv.download(int(fid), dest, lambda p, n=e['name']: prog(f"Giano: porto sul Mac «{n}» — {p}%"))
                         register(fid, _rel(root, dest), e["version"], sha, dest)
                         srv.agent("synced", {"file_id": int(fid), "version": e["version"]})
                         res["downloaded"] += 1
@@ -343,7 +357,8 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             if not any(p.strip() for p in pages):
                 srv.agent("ocr_failed", {"file_id": job["id"], "error": "nessun testo riconosciuto: le pagine sono vuote o troppo scure"})
                 continue
-            up = srv.upload(dst, job["name"], {"as_pending": True})
+            up = srv.upload(dst, job["name"], {"as_pending": True},
+                            on_progress=lambda done, tot, n=job["name"]: prog(f"Giano: «{n}» reso ricercabile, invio — {int(done * 100 / max(1, tot))}%"))
             if up.get("status") != "in_sospeso":
                 raise RuntimeError(up.get("error") or "invio non riuscito")
             srv.agent("ocr_done", {"file_id": job["id"], "sha256": up["sha256"], "size": up["size"], "pages": pages})
@@ -378,7 +393,8 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                 if sha in (r.get("pending_sha"), r.get("ignored_sha")) or open_pending.get(fid) == sha:
                     continue
                 prog(f"Giano: «{os.path.basename(path)}» è cambiato sul Mac")
-                up = srv.upload(path, os.path.basename(path), {"as_pending": True})
+                up = srv.upload(path, os.path.basename(path), {"as_pending": True},
+                                on_progress=lambda done, tot, n=os.path.basename(path): prog(f"Giano: «{n}» cambiato sul Mac, invio — {int(done * 100 / max(1, tot))}%"))
                 if up.get("status") != "in_sospeso":
                     raise RuntimeError(up.get("error") or "invio in sospeso non riuscito")
                 ans = srv.agent("changed", {"file_id": int(fid), "base_version": r["version"], "sha256": sha, "size": st.st_size})
@@ -396,7 +412,8 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                 continue
             prog(f"Giano: invio «{os.path.basename(path)}»")
             sha = _sha(path)
-            up = srv.upload(path, rel)
+            from .progress import fmt_size
+            up = srv.upload(path, rel, on_progress=lambda done, tot, n=os.path.basename(path): prog(f"Giano: invio «{n}» — {int(done * 100 / max(1, tot))}% di {fmt_size(tot)}"))
             if up.get("status") == "rifiutato":
                 reg["skipped"][rel] = st.st_size
                 continue

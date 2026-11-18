@@ -93,15 +93,17 @@ def _server_known(url: str, headers: dict, hashes: list) -> set:
     return known
 
 
-def _upload_one(url: str, headers: dict, path: str, filename: str, md: str) -> tuple:
+def _upload_one(url: str, headers: dict, path: str, filename: str, md: str, report=None) -> tuple:
     """Carica un documento (multipart: file + filename + md). Ritorna
     (status, needs_browser): status in stored | duplicate | error."""
     data = {"filename": filename}
     if md:
         data["md"] = md
     try:
+        from .progress import ProgressFile, size_of
         with open(path, "rb") as fh:
-            files = {"file": (filename, fh, "application/octet-stream")}
+            src = ProgressFile(fh, size_of(path), report) if report else fh
+            files = {"file": (filename, src, "application/octet-stream")}
             r = httpx.post(url, files=files, data=data, headers=headers, timeout=180)
         r.raise_for_status()
         body = r.json() or {}
@@ -237,7 +239,9 @@ def scan_once(conf: dict = None, on_progress=None, dry_run: bool = False) -> dic
 
             prog(f"Documenti: invio {i + 1}/{total} — {filename}"
                  + (f" (md {len(md)} caratteri)" if md else ""))
-            status, needs_browser = _upload_one(url, headers, path, filename, md)
+            from .progress import reporter, size_of
+            status, needs_browser = _upload_one(url, headers, path, filename, md,
+                                                reporter(f"Documenti: invio {i + 1}/{total} — {filename}", prog, size_of(path)))
             if status == "stored":
                 result["uploaded"] += 1
             elif status == "duplicate":
