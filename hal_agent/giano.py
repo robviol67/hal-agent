@@ -326,6 +326,34 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             res["errors"] += 1
     save_registry(reg)
 
+    # ── 3b. riconoscimento del testo delle scansioni (Vision di macOS)
+    for job in data.get("ocr", []):
+        import tempfile
+        tmpd = tempfile.mkdtemp(prefix="giano-ocr-")
+        try:
+            prog(f"Giano: leggo il testo di «{job['name']}»")
+            src, dst = os.path.join(tmpd, "in.pdf"), os.path.join(tmpd, "out.pdf")
+            srv.download(int(job["id"]), src)
+            from .giano_ocr import ocr_pdf, OcrError
+            try:
+                pages = ocr_pdf(src, dst)
+            except OcrError as ex:
+                srv.agent("ocr_failed", {"file_id": job["id"], "error": str(ex)[:200]})
+                continue
+            if not any(p.strip() for p in pages):
+                srv.agent("ocr_failed", {"file_id": job["id"], "error": "nessun testo riconosciuto: le pagine sono vuote o troppo scure"})
+                continue
+            up = srv.upload(dst, job["name"], {"as_pending": True})
+            if up.get("status") != "in_sospeso":
+                raise RuntimeError(up.get("error") or "invio non riuscito")
+            srv.agent("ocr_done", {"file_id": job["id"], "sha256": up["sha256"], "size": up["size"], "pages": pages})
+            res["ocr"] = res.get("ocr", 0) + 1
+        except Exception as ex:
+            log.warning("riconoscimento di %s non riuscito: %s", job.get("id"), ex)
+            res["errors"] += 1
+        finally:
+            shutil.rmtree(tmpd, ignore_errors=True)
+
     # ── 4. la cartella del Mac
     by_path = {r["path"]: fid for fid, r in F.items()}
     seen = set()
@@ -392,9 +420,8 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             try:
                 p = srv.agent("process", {"file_id": f["id"]})
                 if p.get("needs_text"):
-                    t = _pdf_text(path)
-                    if t:
-                        srv.agent("text", {"file_id": f["id"], "text": t})
+                    # se il PDF non ha testo (una scansione), il server lo mette in coda per il riconoscimento
+                    srv.agent("text", {"file_id": f["id"], "text": _pdf_text(path)})
             except Exception as ex:
                 log.debug("ordine di %s non riuscito: %s", f["id"], ex)
             res["sent"] += 1
