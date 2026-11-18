@@ -278,6 +278,13 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             res["errors"] += 1
     save_registry(reg)
 
+    def open_on_mac(fid, path, name):
+        # «Modifica sul Mac»: il file si apre nel suo programma; ciò che si salva diventa la versione nuova
+        import subprocess
+        prog(f"Giano: apro «{name}» sul Mac")
+        subprocess.Popen(["open", path])
+        srv.agent("edit_open", {"file_id": int(fid)})
+
     # ── 3. allinea al web
     for fid, e in web.items():
         try:
@@ -288,6 +295,14 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     _to_trash(root, path_of(fid))
                     del F[fid]
                     res["deleted"] += 1
+                continue
+            if e.get("request") == "word" and e.get("request_state") != "in_corso":
+                if fid not in F or not os.path.exists(path_of(fid)):
+                    dest = _free_path(target)
+                    sha = srv.download(int(fid), dest, lambda p, n=e['name']: prog(f"Giano: scarico «{n}» — {p}%"))
+                    register(fid, _rel(root, dest), e["version"], sha, dest)
+                    srv.agent("synced", {"file_id": int(fid), "version": e["version"]})
+                open_on_mac(fid, path_of(fid), e["name"])
                 continue
             if fid in F:
                 r = F[fid]
@@ -400,6 +415,9 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                 ans = srv.agent("changed", {"file_id": int(fid), "base_version": r["version"], "sha256": sha, "size": st.st_size})
                 if ans.get("same"):
                     r["sha"] = sha
+                elif ans.get("applied") == "aggiorna" and ans.get("version"):
+                    r["sha"], r["version"] = sha, int(ans["version"])     # «Modifica sul Mac» o scelta ricordata
+                    r["size"], r["mtime"] = st.st_size, st.st_mtime
                 else:
                     r["pending_sha"] = sha
                 res["changed"] += 1
