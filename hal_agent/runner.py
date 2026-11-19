@@ -361,14 +361,15 @@ class GianoLoop:
             conf = cfg.load_config()
             g = conf.get("giano", {}) or {}
             interval = max(20, int(g.get("interval_seconds", 60)))
-            forced = self._trigger.is_set()
+            from . import giano
+            forced = self._trigger.is_set() or (g.get("enabled") and giano.pending_commands())
             if forced:
                 self._trigger.clear()
-            if forced or (g.get("enabled") and time.monotonic() - last >= interval):
+            # in pausa (dal pannello): niente giri automatici; «Allinea ora» funziona lo stesso
+            if forced or (g.get("enabled") and not g.get("paused") and time.monotonic() - last >= interval):
                 last = time.monotonic()
                 with self._busy:
                     try:
-                        from . import giano
                         giano.sync_once(conf, on_progress=self._status)
                     except Exception as e:
                         log.error("Giano: giro fallito: %s", e)

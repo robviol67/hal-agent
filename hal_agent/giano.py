@@ -33,6 +33,13 @@ from . import config as cfg
 log = logging.getLogger("hal_agent.giano")
 
 REGISTRY = cfg.CONFIG_DIR / "giano_registro.json"
+# v0.9.3 — il pannello di Giano: il giro scrive, il pannello (altro processo) legge
+STATE = cfg.CONFIG_DIR / "giano_stato.json"        # situazione: ultimo giro, in corso, spazio, errori
+WEBLIST = cfg.CONFIG_DIR / "giano_web.json"        # tutti i file di Giano (azione «overview»)
+ACTIVITY = cfg.CONFIG_DIR / "giano_attivita.jsonl" # un evento per riga
+CMD_DIR = cfg.CONFIG_DIR / "giano_comandi"         # i comandi del pannello, un file ciascuno
+LOCK = cfg.CONFIG_DIR / "giano.lock"               # un giro alla volta
+OVERVIEW_EVERY = 600                               # secondi fra due «overview» se non cambia niente
 TRASH_DIR = ".giano-cestino"
 _SKIP_PREFIX = (".", "~$")
 _SKIP_SUFFIX = (".crdownload", ".part", ".tmp", ".download", ".giano-tmp")
@@ -61,6 +68,126 @@ def save_registry(reg: dict) -> None:
     tmp = REGISTRY.with_suffix(".tmp")
     tmp.write_text(json.dumps(reg, indent=1, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, REGISTRY)
+
+
+# ─────────────────────────── stato, attività, comandi ───────────────────────────
+def read_json(path, default):
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+        return d if isinstance(d, type(default)) else default
+    except Exception:
+        return default
+
+
+def write_json(path, data) -> None:
+    cfg.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def state_update(**kw) -> dict:
+    """Aggiorna giano_stato.json (lo scrive solo il giro)."""
+    s = read_json(STATE, {})
+    s.update(kw)
+    try:
+        write_json(STATE, s)
+    except Exception as e:
+        log.debug("stato non scritto: %s", e)
+    return s
+
+
+def activity(kind: str, text: str, ok: bool = True, fid=None) -> None:
+    """Un evento nello storico del pannello. kind: invio | scarico | sposto | cestino | modifica | decisione | ocr | errore | comando"""
+    try:
+        cfg.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        line = json.dumps({"t": time.time(), "k": kind, "x": text, "ok": ok, "fid": fid}, ensure_ascii=False)
+        with open(ACTIVITY, "a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+        if ACTIVITY.stat().st_size > 2_000_000:          # tiene la metà più recente
+            lines = ACTIVITY.read_text(encoding="utf-8").splitlines()
+            ACTIVITY.write_text("\n".join(lines[len(lines) // 2:]) + "\n", encoding="utf-8")
+    except Exception as e:
+        log.debug("attività non scritta: %s", e)
+
+
+def read_activity(n: int = 500) -> list:
+    try:
+        lines = ACTIVITY.read_text(encoding="utf-8").splitlines()[-n:]
+    except Exception:
+        return []
+    out = []
+    for ln in reversed(lines):
+        try:
+            out.append(json.loads(ln))
+        except Exception:
+            pass
+    return out
+
+
+def send_command(name: str, arg="") -> None:
+    """Dal pannello: allinea | elenco | porta:<id> | riscarica:<id> | svuota_cestino"""
+    CMD_DIR.mkdir(parents=True, exist_ok=True)
+    (CMD_DIR / f"{time.time_ns()}_{name}").write_text(str(arg), encoding="utf-8")
+
+
+def pending_commands() -> bool:
+    try:
+        return any(CMD_DIR.iterdir())
+    except Exception:
+        return False
+
+
+def take_commands() -> list:
+    out = []
+    try:
+        for f in sorted(CMD_DIR.iterdir()):
+            try:
+                out.append((f.name.split("_", 1)[1], f.read_text(encoding="utf-8").strip()))
+            except Exception:
+                pass
+            try:
+                f.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return out
+
+
+def _dir_size(path: str, skip_trash: bool = False) -> tuple:
+    total, n = 0, 0
+    for d, dirs, files in os.walk(path):
+        if skip_trash:
+            dirs[:] = [x for x in dirs if x != TRASH_DIR]
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(d, f)).st_size
+                n += 1
+            except OSError:
+                pass
+    return total, n
+
+
+def local_space(root: str) -> dict:
+    size, n = _dir_size(root, skip_trash=True) if os.path.isdir(root) else (0, 0)
+    tsize, tn = _dir_size(os.path.join(root, TRASH_DIR)) if os.path.isdir(os.path.join(root, TRASH_DIR)) else (0, 0)
+    try:
+        du = shutil.disk_usage(root if os.path.isdir(root) else str(Path.home()))
+        free, disk = du.free, du.total
+    except Exception:
+        free, disk = 0, 0
+    return {"folder_bytes": size, "folder_files": n, "trash_bytes": tsize, "trash_files": tn, "disk_free": free, "disk_total": disk}
+
+
+def empty_local_trash(root: str) -> int:
+    """Svuota ~/Giano/.giano-cestino (chiesto dal pannello, con conferma). Ritorna i byte liberati."""
+    tdir = os.path.join(root, TRASH_DIR)
+    if not os.path.isdir(tdir):
+        return 0
+    size, _ = _dir_size(tdir)
+    shutil.rmtree(tdir, ignore_errors=True)
+    return size
 
 
 def _sha(path: str) -> str:
@@ -198,18 +325,97 @@ def _pdf_text(path: str) -> str:
 
 
 def sync_once(conf: dict = None, on_progress=None) -> dict:
+    """Un giro, con il lucchetto (mai due giri insieme) e lo stato per il pannello."""
+    import fcntl
     conf = conf or cfg.load_config()
-    g = conf.get("giano", {}) or {}
-    res = {"ok": True, "sent": 0, "downloaded": 0, "moved": 0, "deleted": 0, "changed": 0, "errors": 0}
+    cfg.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    lockf = open(LOCK, "w")
+    try:
+        fcntl.flock(lockf, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lockf.close()
+        return {"ok": False, "error_msg": "c'è già un giro in corso"}
+    last = [0.0]
 
     def prog(m):
         if on_progress:
             on_progress(m)
+        now = time.time()
+        if now - last[0] > 0.7:                # il pannello lo legge: non a ogni byte
+            last[0] = now
+            state_update(running=True, step=m)
+
+    started = time.time()
+    state_update(running=True, step="Giano: comincio il giro", started=started)
+    res, srv = {"ok": False}, None
+    try:
+        res, srv = _round(conf, prog)
+    except Exception as e:
+        log.exception("giro di Giano fallito")
+        res = {"ok": False, "error_msg": str(e)[:200]}
+    finally:
+        try:
+            _after_round(conf, res, srv, started)
+        finally:
+            fcntl.flock(lockf, fcntl.LOCK_UN)
+            lockf.close()
+    return res
+
+
+def _after_round(conf: dict, res: dict, srv, started: float) -> None:
+    g = conf.get("giano", {}) or {}
+    root = os.path.expanduser(g.get("folder") or str(Path.home() / "Giano"))
+    st = read_json(STATE, {})
+    changed = any(res.get(k) for k in ("sent", "downloaded", "moved", "deleted", "changed"))
+    want = res.pop("_want_overview", False)
+    over = None
+    if srv is not None and res.get("ok") and (want or changed or time.time() - st.get("overview_at", 0) > OVERVIEW_EVERY):
+        try:
+            over = srv.agent("overview")
+            write_json(WEBLIST, {"at": time.time(), "files": over.get("files", []), "decisions": over.get("decisions", [])})
+        except Exception as e:
+            log.info("panoramica di Giano non letta: %s", e)
+    fails = 0 if res.get("ok") else int(st.get("fails", 0)) + 1
+    kw = dict(running=False, step="", last_run=time.time(), last_ok=bool(res.get("ok")), fails=fails,
+              last_result={k: res.get(k, 0) for k in ("sent", "downloaded", "moved", "deleted", "changed", "errors", "ocr")},
+              error=res.get("error_msg") or "", duration=round(time.time() - started, 1),
+              folder=root, local=local_space(root), server=conf.get("server_url") or "")
+    if res.get("ok"):
+        kw["last_good"] = time.time()
+    if over:
+        kw.update(online=over.get("storage") or {}, overview_at=time.time())
+    if not res.get("ok") and res.get("error_msg"):
+        activity("errore", "Giro non riuscito: " + res["error_msg"], ok=False)
+    state_update(**kw)
+
+
+def _commands(srv, root: str, res: dict, prog) -> None:
+    """I comandi lasciati dal pannello."""
+    for name, arg in take_commands():
+        try:
+            if name in ("porta", "riscarica"):
+                fid = int(arg)
+                srv.agent("request", {"file_id": fid, "what": name})
+                activity("comando", ("Chiesto di portare sul Mac" if name == "porta" else "Chiesto di riscaricare") + f" il file {arg}", fid=fid)
+            elif name == "svuota_cestino":
+                freed = empty_local_trash(root)
+                from .progress import fmt_size
+                activity("cestino", f"Svuotato il cestino locale: liberati {fmt_size(freed)}")
+                res["_want_overview"] = True
+            elif name == "elenco":
+                res["_want_overview"] = True
+        except Exception as e:
+            activity("errore", f"Comando «{name}» non eseguito: {e}", ok=False)
+
+
+def _round(conf: dict, prog) -> tuple:
+    g = conf.get("giano", {}) or {}
+    res = {"ok": True, "sent": 0, "downloaded": 0, "moved": 0, "deleted": 0, "changed": 0, "errors": 0}
 
     token, base = conf.get("token") or "", conf.get("server_url") or ""
     if not token or not base:
         res.update(ok=False, error_msg="collegamento non configurato")
-        return res
+        return res, None
     root = os.path.expanduser(g.get("folder") or str(Path.home() / "Giano"))
     os.makedirs(root, exist_ok=True)
     srv = Server(base, token)
@@ -220,10 +426,11 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
         h = srv.agent("hello", {"folder": root.replace(str(Path.home()), "~"), "version": _version()})
         srv.chunk = int(h.get("chunk") or srv.chunk)
         srv.max_file = int(h.get("max_file") or srv.max_file)
+        _commands(srv, root, res, prog)
         data = srv.agent("sync")
     except Exception as e:
         res.update(ok=False, error_msg=str(e)[:200])
-        return res
+        return res, None
     web = {str(e["id"]): e for e in data.get("files", [])}
     open_pending = {str(o["file_id"]): o["pending_sha"] for o in data.get("open", [])}
 
@@ -273,8 +480,11 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     else:
                         F.pop(fid, None)
             srv.agent("ack", {"id": d["id"]})
+            nm = (web.get(fid) or {}).get("name") or (F.get(fid) or {}).get("path", fid)
+            activity("decisione", {"aggiorna": "Aggiornato", "ignora": "Tenuta la versione di Giano per", "duplica": "Duplicato"}.get(d["choice"], d["choice"]) + f" «{os.path.basename(str(nm))}»", fid=int(fid))
         except Exception as e:
             log.warning("decisione %s non eseguita: %s", d.get("id"), e)
+            activity("errore", f"Decisione sul file {fid} non eseguita: {e}", ok=False, fid=int(fid))
             res["errors"] += 1
     save_registry(reg)
 
@@ -295,6 +505,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     _to_trash(root, path_of(fid))
                     del F[fid]
                     res["deleted"] += 1
+                    activity("cestino", f"«{e['name']}» eliminato in Giano: messo nel cestino locale", fid=int(fid))
                 continue
             if e.get("request") == "word" and e.get("request_state") != "in_corso":
                 if fid not in F or not os.path.exists(path_of(fid)):
@@ -311,6 +522,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     if not os.path.exists(target):
                         os.makedirs(os.path.dirname(target), exist_ok=True)
                         shutil.move(cur, target)
+                        activity("sposto", f"Spostato «{e['name']}» → {e.get('dir') or 'cartella principale'}", fid=int(fid))
                         r["path"] = target_rel
                         cur = target
                         res["moved"] += 1
@@ -321,6 +533,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                         register(fid, target_rel, e["version"], sha, target)
                         srv.agent("synced", {"file_id": int(fid), "version": e["version"]})
                         res["downloaded"] += 1
+                        activity("scarico", f"Riscaricato «{e['name']}» (v{e['version']})", fid=int(fid))
                     continue
                 local_same = False
                 st = os.stat(cur)
@@ -334,6 +547,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     register(fid, r["path"], e["version"], sha, cur)
                     srv.agent("synced", {"file_id": int(fid), "version": e["version"]})
                     res["downloaded"] += 1
+                    activity("scarico", f"Scaricata la v{e['version']} di «{e['name']}»", fid=int(fid))
                 elif e.get("mac_version") is None and local_same:
                     srv.agent("synced", {"file_id": int(fid), "version": r["version"]})
             else:
@@ -348,10 +562,12 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                         register(fid, _rel(root, dest), e["version"], sha, dest)
                         srv.agent("synced", {"file_id": int(fid), "version": e["version"]})
                         res["downloaded"] += 1
+                        activity("scarico", f"Portato sul Mac «{e['name']}» → {e.get('dir') or 'cartella principale'}", fid=int(fid))
                     else:
                         srv.agent("deleted", {"file_id": int(fid)})   # Giano crede che il Mac l'abbia, ma non c'è
         except Exception as ex:
             log.warning("allineamento di %s non riuscito: %s", fid, ex)
+            activity("errore", f"«{e.get('name', fid)}»: allineamento non riuscito ({ex})", ok=False, fid=int(fid))
             res["errors"] += 1
     save_registry(reg)
 
@@ -378,6 +594,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                 raise RuntimeError(up.get("error") or "invio non riuscito")
             srv.agent("ocr_done", {"file_id": job["id"], "sha256": up["sha256"], "size": up["size"], "pages": pages})
             res["ocr"] = res.get("ocr", 0) + 1
+            activity("ocr", f"Letto il testo di «{job['name']}» ({len(pages)} pagine): ora è ricercabile", fid=int(job["id"]))
         except Exception as ex:
             log.warning("riconoscimento di %s non riuscito: %s", job.get("id"), ex)
             res["errors"] += 1
@@ -420,6 +637,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                     r["size"], r["mtime"] = st.st_size, st.st_mtime
                 else:
                     r["pending_sha"] = sha
+                    activity("modifica", f"«{os.path.basename(path)}» è cambiato sul Mac: aspetta una decisione", fid=int(fid))
                 res["changed"] += 1
                 continue
             # file nuovo
@@ -427,6 +645,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
                 continue
             if st.st_size > srv.max_file:
                 reg["skipped"][rel] = st.st_size
+                activity("errore", f"«{os.path.basename(rel)}» è troppo grande per Giano: resta solo sul Mac", ok=False)
                 continue
             prog(f"Giano: invio «{os.path.basename(path)}»")
             sha = _sha(path)
@@ -452,6 +671,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             seen.add(str(f["id"]))
             srv.agent("synced", {"file_id": f["id"], "version": f["version"]})
             srv.agent("log", {"orig_name": os.path.basename(path), "name": f["name"], "folder_id": f.get("folder_id")})
+            activity("invio", f"Salito «{f['name']}»" + (f" → {os.path.dirname(rel)}" if os.path.dirname(rel) else ""), fid=int(f["id"]))
             try:
                 p = srv.agent("process", {"file_id": f["id"]})
                 if p.get("needs_text"):
@@ -462,6 +682,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             res["sent"] += 1
         except Exception as ex:
             log.warning("file %s: %s", rel, ex)
+            activity("errore", f"«{os.path.basename(rel)}»: invio non riuscito ({ex})", ok=False)
             res["errors"] += 1
         save_registry(reg)
 
@@ -471,6 +692,7 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             continue
         try:
             srv.agent("deleted", {"file_id": int(fid)})
+            activity("cestino", f"«{os.path.basename(F[fid]['path'])}» cancellato sul Mac: in Giano resta «solo online»", fid=int(fid))
             del F[fid]
             res["deleted"] += 1
         except Exception as ex:
@@ -478,4 +700,4 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
             res["errors"] += 1
     save_registry(reg)
     prog(f"Giano: {res['sent']} inviati, {res['downloaded']} scaricati, {res['changed']} da decidere")
-    return res
+    return res, srv

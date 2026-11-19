@@ -430,6 +430,7 @@ def run_tray():
         Item(lambda item: _folder_label("giano"), on_open_giano_folder),
         Item("Scegli la cartella di Giano…", on_pick_giano_folder),
         Item("Allinea Giano ora", on_sync_giano),
+        Item("Pannello di Giano…", on_open_panel),
         pystray.Menu.SEPARATOR,
         Item("Libreria (cartella osservata)", on_toggle_library,
              checked=lambda item: _library_enabled()),

@@ -121,8 +121,8 @@ def open_panel():
 
     root = tk.Tk()
     root.title("HAL Agent — Pannello")
-    root.geometry("820x560")
-    root.minsize(720, 480)
+    root.geometry("940x640")
+    root.minsize(780, 520)
 
     style = ttk.Style()
     try:
@@ -144,6 +144,15 @@ def open_panel():
 
     nb = ttk.Notebook(root, padding=(10, 6))
     nb.pack(fill="both", expand=True)
+
+    # ═══ TAB 0 — GIANO (v0.9.3): la prima, quella in primo piano ═══════════
+    giano_refresh = None
+    try:
+        from .giano_panel import build_giano_tab
+        tab_giano, giano_refresh, _giano_on = build_giano_tab(nb, root)
+        nb.add(tab_giano, text="Giano")
+    except Exception:
+        log.exception("pannello: scheda Giano non costruita")
 
     # ═══ TAB 1 — SCOUT ══════════════════════════════════════════════════════
     tab_scout = ttk.Frame(nb, padding=10)
@@ -619,6 +628,8 @@ def open_panel():
             lbl_next.config(text="Prossima raccolta: " + _fmt_countdown(data.get("next_run_ts")))
 
         _safe("intestazione", _testa)
+        if giano_refresh:
+            _safe("Giano", giano_refresh)
         _safe("Scout collegati", fill_scouts)
         _safe("Invii recenti", fill_runs)
         _safe("Ponte LLM", refresh_bridge_state)

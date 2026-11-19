@@ -27,7 +27,7 @@ a = Analysis(
         'pystray._darwin' if sys.platform == 'darwin' else 'pystray._win32',
         'tkinter', 'tkinter.ttk', 'tkinter.messagebox',   # pannello + finestra ponte LLM
         'hal_agent.convert',                              # conversioni su richiesta (import dentro il loop)
-        'hal_agent.giano', 'hal_agent.giano_ocr', 'hal_agent.progress',  # Giano, riconoscimento, percentuali
+        'hal_agent.giano', 'hal_agent.giano_ocr', 'hal_agent.giano_panel', 'hal_agent.progress',  # Giano, riconoscimento, percentuali
         'Vision', 'CoreText',
     ] + (['Quartz', 'Foundation'] if sys.platform == 'darwin' else []),   # PDFKit per i PDF (docmd.py)
     hookspath=[],
