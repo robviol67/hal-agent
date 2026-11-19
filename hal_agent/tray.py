@@ -82,7 +82,12 @@ def run_tray():
     transcripts = TranscriptLoop(on_status=lambda s: status.__setitem__("text", s))
     video = VideoLoop(on_status=lambda s: status.__setitem__("text", s))
     converter = ConvertLoop(on_status=lambda s: status.__setitem__("text", s))
-    giano_loop = GianoLoop(on_status=lambda s: status.__setitem__("text", s))
+    holder = {"icon": None}
+
+    def _notify(msg, title="HAL Agent · Giano"):
+        if holder["icon"] is not None:
+            holder["icon"].notify(msg, title)
+    giano_loop = GianoLoop(on_status=lambda s: status.__setitem__("text", s), on_notify=_notify)
 
     def _giano_enabled():
         return bool((cfg.load_config().get("giano") or {}).get("enabled"))
@@ -462,6 +467,24 @@ def run_tray():
     )
     icon = pystray.Icon("hal_agent", _make_icon_image(),
                         f"HAL Agent v{__version__}", menu)
+    holder["icon"] = icon
+
+    def _update_watch():
+        # v0.9.5: ogni 6 ore guarda le Release; una notifica per ogni versione nuova
+        import threading as _th
+        from . import updates
+        stop = _th.Event()
+        stop.wait(60)
+        while True:
+            try:
+                tag = updates.check(_latest_release)
+                if tag:
+                    _notify(f"È uscita la versione {tag} di HAL Agent (hai la v{__version__}). "
+                            "La trovi in «Verifica aggiornamenti…» o nel pannello.", "HAL Agent")
+            except Exception as e:
+                log.debug("controllo aggiornamenti: %s", e)
+            stop.wait(1800)
+    threading.Thread(target=_update_watch, daemon=True).start()
 
     loop.start()
     bridge.start()

@@ -101,7 +101,8 @@ DEFAULT_CONFIG = {
         "paused": False,                      # v0.9.3: in pausa dal pannello (niente giri automatici)
         "exclude_ext": [],                    # v0.9.4: estensioni che NON salgono (solo file nuovi)
         "exclude_dirs": [],                   # v0.9.4: cartelle che NON salgono (nome o percorso)
-        "max_mb": 0                           # v0.9.4: limite per file nuovi (0 = nessuno)
+        "max_mb": 0,                          # v0.9.4: limite per file nuovi (0 = nessuno)
+        "notify": "importanti"                # v0.9.5: notifiche di macOS: importanti | tutto | niente
     },
     # Capability «Video»: la terza cartella osservata. Dentro NON ci vanno file da
     # caricare ma ELENCHI DI LINK YouTube (file .txt, un link per riga, # = commento).

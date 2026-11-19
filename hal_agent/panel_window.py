@@ -121,8 +121,8 @@ def open_panel():
 
     root = tk.Tk()
     root.title("HAL Agent — Pannello")
-    root.geometry("940x640")
-    root.minsize(780, 520)
+    root.geometry("960x800")
+    root.minsize(800, 640)
 
     style = ttk.Style()
     try:

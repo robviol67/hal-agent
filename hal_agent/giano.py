@@ -350,6 +350,8 @@ def sync_once(conf: dict = None, on_progress=None) -> dict:
     res, srv = {"ok": False}, None
     try:
         res, srv = _round(conf, prog)
+        if res.pop("_check", False):
+            check_all(conf, prog, res)
     except Exception as e:
         log.exception("giro di Giano fallito")
         res = {"ok": False, "error_msg": str(e)[:200]}
@@ -386,7 +388,81 @@ def _after_round(conf: dict, res: dict, srv, started: float) -> None:
         kw.update(online=over.get("storage") or {}, overview_at=time.time())
     if not res.get("ok") and res.get("error_msg"):
         activity("errore", "Giro non riuscito: " + res["error_msg"], ok=False)
+    res["notify"] = _notifications(g, res, st, kw)
     state_update(**kw)
+
+
+def _notifications(g: dict, res: dict, before: dict, kw: dict) -> list:
+    """Le notifiche di macOS dopo un giro (v0.9.5). g['notify']: importanti | tutto | niente.
+    Ogni avviso parte UNA volta: i segni restano in giano_stato.json."""
+    mode = g.get("notify") or "importanti"
+    out = []
+    # file che aspettano una decisione: si avvisa quando aumentano
+    try:
+        w = read_json(WEBLIST, {})
+        reg = load_registry().get("files", {})
+        ids = {str(d.get("file_id")) for d in w.get("decisions", [])} | {k for k, r in reg.items() if r.get("pending_sha")}
+        n_dec = len(ids)
+    except Exception:
+        n_dec = int(before.get("notified_dec", 0))
+    if n_dec > int(before.get("notified_dec", 0)):
+        out.append(f"{n_dec} file {'aspetta' if n_dec == 1 else 'aspettano'} una decisione: cambiati sul Mac dopo l'invio. "
+                   "Scegli nel pannello di Giano.")
+    kw["notified_dec"] = n_dec
+    # tre giri falliti di fila
+    if kw.get("fails") == 3:
+        out.append("Giano non riesce ad allinearsi da tre giri: " + (res.get("error_msg") or "errore sconosciuto") + ". Riprovo da solo.")
+    # disco quasi pieno: una volta al giorno
+    free = (kw.get("local") or {}).get("disk_free") or 0
+    today = time.strftime("%Y-%m-%d")
+    if free and free < 5_000_000_000 and before.get("notified_disk") != today:
+        out.append(f"Disco quasi pieno: restano {free / 1e9:.1f} GB. Giano può portare sul Mac meno file.".replace(".", ",", 1))
+        kw["notified_disk"] = today
+    # esito di «Controlla tutto»
+    chk = res.get("check")
+    if chk:
+        out.append(f"Controllo finito: {chk['n']} file verificati, tutti uguali a Giano." if not chk["bad"]
+                   else (f"Controllo finito: {len(chk['bad'])} file del Mac non sono uguali a quelli di Giano. Li trovi fra «Da decidere»." if len(chk["bad"]) > 1
+                         else "Controllo finito: 1 file del Mac non è uguale a quello di Giano. Lo trovi fra «Da decidere»."))
+    if mode == "tutto":
+        r = res
+        bits = [f"{r[k]} {lab}" for k, lab in (("sent", "inviati"), ("downloaded", "scaricati"), ("moved", "spostati")) if r.get(k)]
+        if bits:
+            out.append("Giano: " + ", ".join(bits) + ".")
+    if mode == "niente":
+        return []
+    return out
+
+
+def check_all(conf: dict, prog, res: dict) -> None:
+    """«Controlla tutto» (v0.9.5): rilegge ogni file del Mac e lo confronta con l'impronta che
+    Giano conosce. Un file diverso (cambiato senza che il giro se ne accorgesse, o rovinato)
+    viene ripreso al prossimo giro come «cambiato sul Mac»: decidi tu."""
+    g = conf.get("giano", {}) or {}
+    root = os.path.expanduser(g.get("folder") or str(Path.home() / "Giano"))
+    reg = load_registry()
+    F = reg["files"]
+    items = [(fid, r) for fid, r in F.items() if os.path.exists(os.path.join(root, r["path"]))]
+    total = sum(int(r.get("size") or 0) for _, r in items) or 1
+    done, bad = 0, []
+    for i, (fid, r) in enumerate(items):
+        path = os.path.join(root, r["path"])
+        prog(f"Giano: controllo «{os.path.basename(path)}» — {int(done * 100 / total)}% ({i + 1} di {len(items)})")
+        try:
+            sha = _sha(path)
+        except OSError as e:
+            bad.append(r["path"])
+            activity("errore", f"«{os.path.basename(path)}» non si legge: {e}", ok=False, fid=int(fid))
+            continue
+        done += int(r.get("size") or 0)
+        if sha != r["sha"] and sha not in (r.get("pending_sha"), r.get("ignored_sha")):
+            bad.append(r["path"])
+            r["mtime"] = 0          # il prossimo giro lo rilegge e lo tratta come cambiato
+            activity("modifica", f"«{os.path.basename(path)}» sul Mac non è uguale a quello di Giano: lo riprendo al prossimo giro", ok=False, fid=int(fid))
+    save_registry(reg)
+    res["check"] = {"n": len(items), "bad": bad}
+    state_update(check={"at": time.time(), "n": len(items), "bad": len(bad)})
+    activity("comando", f"Controllo finito: {len(items)} file verificati" + (", tutti uguali a Giano" if not bad else f", {len(bad)} diversi"))
 
 
 def _commands(srv, root: str, res: dict, prog) -> None:
@@ -414,6 +490,8 @@ def _commands(srv, root: str, res: dict, prog) -> None:
                 res["_want_overview"] = True
             elif name == "elenco":
                 res["_want_overview"] = True
+            elif name == "controlla":
+                res["_check"] = True
         except Exception as e:
             activity("errore", f"Comando «{name}» non eseguito: {e}", ok=False)
 

@@ -122,6 +122,11 @@ def build_giano_tab(nb, root):
     for b in (b_sync, b_pause, b_finder, b_web):
         b.pack(side="left", padx=(6, 0))
 
+    from . import updates
+    upd = ttk.Frame(tab)
+    lbl_upd = ttk.Label(upd, text="", foreground="#3d48a8")
+    lbl_upd.pack(side="left")
+    ttk.Button(upd, text="Scarica la versione nuova", command=lambda: webbrowser.open(updates.RELEASES_URL)).pack(side="left", padx=(10, 0))
     lbl_flash = ttk.Label(tab, text="", style="Muted.TLabel")
     lbl_flash.pack(fill="x")
     flash_until = [0.0]
@@ -482,6 +487,17 @@ def build_giano_tab(nb, root):
             flash("Svuoto il cestino locale al prossimo giro (fra pochi secondi).")
     b_trash = ttk.Button(lf_mac, text="Svuota il cestino locale…", command=on_empty_trash)
     b_trash.pack(anchor="w", pady=(10, 0))
+
+    def on_check():
+        if messagebox.askyesno("Controlla tutto",
+                               "Rileggo tutti i file della cartella del Mac e li confronto con Giano, per scoprire file "
+                               "cambiati senza che me ne accorgessi o rovinati. Con molti file ci vuole qualche minuto: "
+                               "l'avanzamento lo vedi in alto.\n\nComincio?", parent=root):
+            giano.send_command("controlla")
+            flash("Controllo chiesto: parte con il prossimo giro (fra pochi secondi).")
+    ttk.Button(lf_mac, text="Controlla tutti i file del Mac…", command=on_check).pack(anchor="w", pady=(6, 0))
+    lbl_check = ttk.Label(lf_mac, text="", style="Muted.TLabel", wraplength=380, justify="left")
+    lbl_check.pack(anchor="w", pady=(4, 0))
     lbl_space_note = ttk.Label(ts, text="", style="Muted.TLabel", wraplength=700, justify="left")
     lbl_space_note.grid(column=0, row=1, columnspan=2, sticky="w", pady=(8, 0))
     space_sig = [None]
@@ -528,6 +544,9 @@ def build_giano_tab(nb, root):
         if tot:
             disk_bar.config(value=round((tot - free) * 100 / tot))
             lbl_disk.config(text=f"Disco: liberi {_size(free)} su {_size(tot)}" + ("   ⚠ quasi pieno" if free < 5_000_000_000 else ""))
+        chk = s.get("check") or {}
+        lbl_check.config(text=(f"Ultimo controllo {_hm(chk.get('at'))}: {chk.get('n', 0)} file, "
+                               + ("tutti uguali a Giano." if not chk.get("bad") else f"{chk['bad']} diversi (ripresi come «da decidere»).")) if chk else "Mai controllati.")
         lbl_space_note.config(text=("Spazio sul Mac misurato alla fine dell'ultimo giro (" + _hm(s.get("last_run")) + ")."
                                     if s.get("last_run") else "I numeri arrivano alla fine del primo giro."))
 
@@ -586,6 +605,8 @@ def build_giano_tab(nb, root):
     v_ext = tk.StringVar(value=", ".join(g0.get("exclude_ext") or []))
     v_dirs = tk.StringVar(value=", ".join(g0.get("exclude_dirs") or []))
     v_mb = tk.StringVar(value=str(g0.get("max_mb") or 0).rstrip("0").rstrip(".") if g0.get("max_mb") else "0")
+    NOTIFY = [("importanti", "solo decisioni ed errori"), ("tutto", "anche invii e scaricamenti"), ("niente", "nessuna")]
+    v_notify = tk.StringVar(value=next((l for k_, l in NOTIFY if k_ == (g0.get("notify") or "importanti")), NOTIFY[0][1]))
     r_ = 0
     for label, widget, help_ in (
         ("Un giro", ttk.Combobox(ti, textvariable=v_every, values=[l for _, l in EVERY], state="readonly", width=20),
@@ -595,14 +616,15 @@ def build_giano_tab(nb, root):
         ("Cartelle da non far salire", ttk.Entry(ti, textvariable=v_dirs, width=44),
          "Nomi di cartelle (ovunque si trovino), oppure un percorso dentro Giano: node_modules, Foto grandi, Clienti/Archivio."),
         ("Limite di dimensione (MB)", ttk.Entry(ti, textvariable=v_mb, width=10),
-         "I file più grandi restano solo sul Mac. 0 = nessun limite (vale comunque il limite di Giano).")):
+         "I file più grandi restano solo sul Mac. 0 = nessun limite (vale comunque il limite di Giano)."),
+        ("Notifiche", ttk.Combobox(ti, textvariable=v_notify, values=[l for _, l in NOTIFY], state="readonly", width=26),
+         "Le notifiche di macOS: file da decidere, giri che non riescono, disco quasi pieno, esito di «Controlla tutto».")):
         ttk.Label(ti, text=label).grid(column=0, row=r_, sticky="w", pady=(6, 0))
         widget.grid(column=1, row=r_, sticky="w", pady=(6, 0), padx=(12, 0))
-        ttk.Label(ti, text=help_, style="Muted.TLabel", wraplength=560, justify="left").grid(column=1, row=r_ + 1, sticky="w", padx=(12, 0))
+        ttk.Label(ti, text=help_, style="Muted.TLabel", wraplength=640, justify="left").grid(column=1, row=r_ + 1, sticky="w", padx=(12, 0))
         r_ += 2
     ttk.Label(ti, style="Muted.TLabel", wraplength=700, justify="left",
-              text="Esclusioni e limite valgono per i file NUOVI della cartella: quelli già in Giano restano allineati. "
-                   "I file esclusi compaiono nell'Attività, una volta sola.").grid(column=0, row=r_, columnspan=2, sticky="w", pady=(14, 0))
+              text="Esclusioni e limite valgono per i file NUOVI: quelli già in Giano restano allineati.").grid(column=0, row=r_, columnspan=2, sticky="w", pady=(10, 0))
 
     def save_settings():
         try:
@@ -618,9 +640,33 @@ def build_giano_tab(nb, root):
         g["exclude_ext"] = [x.strip().lower().lstrip(".") for x in v_ext.get().split(",") if x.strip()]
         g["exclude_dirs"] = [x.strip().strip("/") for x in v_dirs.get().split(",") if x.strip().strip("/")]
         g["max_mb"] = mb
+        g["notify"] = next((k_ for k_, l in NOTIFY if l == v_notify.get()), "importanti")
         cfg.save_config(c)
         flash("Impostazioni di Giano salvate: valgono dal prossimo giro.")
-    ttk.Button(ti, text="Salva", command=save_settings).grid(column=1, row=r_ + 1, sticky="w", padx=(12, 0), pady=(14, 0))
+    ttk.Button(ti, text="Salva", command=save_settings).grid(column=1, row=r_ + 1, sticky="w", padx=(12, 0), pady=(8, 0))
+
+    # avvio all'accensione (v0.9.5): vale subito, senza «Salva»
+    from . import autostart
+    v_auto = tk.BooleanVar(value=autostart.is_enabled())
+    lbl_auto = ttk.Label(ti, text="", style="Muted.TLabel", wraplength=560, justify="left")
+
+    def on_auto():
+        if v_auto.get():
+            why = autostart.enable()
+            if why:
+                v_auto.set(False)
+                lbl_auto.config(text="Non riesco: " + why + ".")
+                return
+            lbl_auto.config(text="Fatto: al prossimo accesso al Mac HAL Agent si apre da solo. macOS può mostrare l'avviso «elemento di login aggiunto».")
+        else:
+            autostart.disable()
+            lbl_auto.config(text="Tolto: HAL Agent non si apre più da solo all'accensione.")
+    cb_auto = ttk.Checkbutton(ti, text="Apri HAL Agent all'accensione del Mac", variable=v_auto, command=on_auto)
+    cb_auto.grid(column=0, row=r_ + 2, columnspan=2, sticky="w", pady=(16, 0))
+    lbl_auto.grid(column=0, row=r_ + 3, columnspan=2, sticky="w")
+    if not autostart.app_path():
+        cb_auto.state(["disabled"])
+        lbl_auto.config(text="Disponibile con l'app installata in Applicazioni.")
 
     # ═══ testata ════════════════════════════════════════════════════════════
     head_sig = [None]
@@ -665,6 +711,14 @@ def build_giano_tab(nb, root):
             parts.append("in pausa" if paused else ("prossimo fra pochi secondi" if nxt < 10 else f"prossimo fra {max(1, round(nxt / 60))} min"))
             if lbl_detail.cget("text") == "":
                 lbl_detail.config(text="  ·  ".join(parts))
+        nv = updates.newer()
+        if nv:
+            from . import __version__ as _v
+            lbl_upd.config(text=f"È uscita la versione {nv} di HAL Agent (questa è la v{_v}).")
+            if not upd.winfo_ismapped():
+                upd.pack(fill="x", before=lbl_flash, pady=(0, 4))
+        elif upd.winfo_ismapped():
+            upd.pack_forget()
         # pulsanti
         for b in (b_enable, b_decide, b_sync, b_pause, b_finder, b_web):
             b.pack_forget()

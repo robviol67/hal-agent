@@ -341,11 +341,12 @@ class GianoLoop:
     la cartella ~/Giano con Giano su hal-ai.it (giano.sync_once). Rilegge la config a
     ogni giro; trigger_now() forza un giro subito.
     """
-    def __init__(self, on_status=None):
+    def __init__(self, on_status=None, on_notify=None):
         self._stop = threading.Event()
         self._thread = None
         self._trigger = threading.Event()
         self.on_status = on_status or (lambda s: None)
+        self.on_notify = on_notify or (lambda s: None)     # v0.9.5: notifiche di macOS
         self._busy = threading.Lock()
 
     def _status(self, msg):
@@ -370,7 +371,12 @@ class GianoLoop:
                 last = time.monotonic()
                 with self._busy:
                     try:
-                        giano.sync_once(conf, on_progress=self._status)
+                        res = giano.sync_once(conf, on_progress=self._status)
+                        for msg in (res or {}).get("notify") or []:
+                            try:
+                                self.on_notify(msg)
+                            except Exception:
+                                pass
                     except Exception as e:
                         log.error("Giano: giro fallito: %s", e)
                         self._status(f"Giano: errore {e}")
