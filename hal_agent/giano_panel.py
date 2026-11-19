@@ -25,6 +25,7 @@ log = logging.getLogger("hal_agent.giano_panel")
 KINDS = {"pdf": "PDF", "documento": "Word e documenti", "foglio": "Fogli", "presentazione": "Presentazioni",
          "immagine": "Immagini", "scansione": "Scansioni", "testo": "Testi", "pagina_web": "Pagine web",
          "audio": "Audio", "video": "Video", "archivio": "Archivi", "altro": "Altro"}
+PREFS = cfg.CONFIG_DIR / "giano_pannello.json"   # Elenco/Albero e cartelle aperte
 FILTERS = ["Tutti", "Sul Mac", "Solo online", "Il Mac è indietro", "Da decidere", "In coda per il Mac", "Errore"]
 ACT_ICON = {"invio": "↑", "scarico": "↓", "sposto": "→", "cestino": "🗑", "modifica": "✎", "decisione": "✓",
             "ocr": "Aa", "errore": "!", "comando": "›"}
@@ -117,6 +118,7 @@ def build_giano_tab(nb, root):
     b_enable = ttk.Button(btns, text="Accendi Giano", command=on_enable)
     b_finder = ttk.Button(btns, text="Apri la cartella", command=lambda: subprocess.Popen(["open", folder()]))
     b_web = ttk.Button(btns, text="Apri Giano sul web", command=lambda: webbrowser.open(server() + "/giano/"))
+    b_decide = ttk.Button(btns, text="Scegli…", command=lambda: show_decisions())
     for b in (b_sync, b_pause, b_finder, b_web):
         b.pack(side="left", padx=(6, 0))
 
@@ -149,10 +151,24 @@ def build_giano_tab(nb, root):
     ttk.Label(bar2, text="Cerca").pack(side="left")
     e_search = ttk.Entry(bar2, textvariable=v_search, width=30)
     e_search.pack(side="left", padx=(6, 0))
+    # Elenco / Albero (v0.9.4): la scelta resta in ~/.hal-agent/giano_pannello.json
+    prefs = giano.read_json(PREFS, {})
+    v_view = tk.StringVar(value=prefs.get("view") or "elenco")
+    open_dirs = set(prefs.get("open") or [])
+
+    def save_prefs():
+        try:
+            giano.write_json(PREFS, {"view": v_view.get(), "open": sorted(open_dirs)[:500]})
+        except Exception:
+            pass
+    vseg = ttk.Frame(bar2)
+    vseg.pack(side="right")
+    ttk.Radiobutton(vseg, text="Elenco", value="elenco", variable=v_view, command=lambda: (save_prefs(), fill_files(force=True))).pack(side="left")
+    ttk.Radiobutton(vseg, text="Albero", value="albero", variable=v_view, command=lambda: (save_prefs(), fill_files(force=True))).pack(side="left", padx=(8, 0))
 
     cols = ("nome", "cartella", "dim", "giano", "mac", "stato")
     heads = {"nome": "Nome", "cartella": "Cartella", "dim": "Dimensione", "giano": "Giano", "mac": "Mac", "stato": "Stato"}
-    widths = {"nome": 230, "cartella": 170, "dim": 80, "giano": 50, "mac": 50, "stato": 140}
+    widths = {"nome": 230, "cartella": 170, "dim": 80, "giano": 50, "mac": 50, "stato": 190}
     tvw = ttk.Frame(tf)
     tvw.pack(fill="both", expand=True, pady=(6, 4))
     tv = ttk.Treeview(tvw, columns=cols, show="headings", height=12, selectmode="browse")
@@ -169,21 +185,39 @@ def build_giano_tab(nb, root):
     for c in cols:
         tv.heading(c, text=heads[c], command=lambda c=c: set_sort(c))
         tv.column(c, width=widths[c], anchor="w" if c in ("nome", "cartella", "stato") else "e", stretch=c in ("nome", "cartella"))
+    tv.heading("#0", text="Nome", command=lambda: set_sort("nome"))
+    tv.column("#0", width=380, stretch=True)
     for tag, color in (("decidi", "#8c4f14"), ("errore", "#a3241b"), ("online", "#6f675c"), ("indietro", "#3d48a8")):
         tv.tag_configure(tag, foreground=color)
+    try:
+        import tkinter.font as tkfont
+        _f = tkfont.nametofont("TkDefaultFont").actual()
+        tv.tag_configure("dir", font=(_f["family"], _f["size"], "bold"))
+    except Exception:
+        pass
 
     acts = ttk.Frame(tf)
     acts.pack(fill="x")
-    lbl_sel = ttk.Label(acts, text="", style="Muted.TLabel")
-    lbl_sel.pack(side="left")
-    b_porta = ttk.Button(acts, text="Porta sul Mac")
+    b_porta = ttk.Button(acts, text="Porta sul Mac", width=18)
     b_riscarica = ttk.Button(acts, text="Riscarica")
     b_show = ttk.Button(acts, text="Mostra nel Finder")
     b_open = ttk.Button(acts, text="Apri in Giano")
-    for b in (b_open, b_show, b_riscarica, b_porta):
+    for b in (b_open, b_show, b_riscarica, b_porta):      # prima i pulsanti: l'etichetta prende lo spazio che resta
         b.pack(side="right", padx=(6, 0))
+    lbl_sel = ttk.Label(acts, text="", style="Muted.TLabel")
+    lbl_sel.pack(side="left", fill="x", expand=True)
+    # le decisioni (v0.9.4): compaiono solo per un file «Da decidere»
+    dec_bar = ttk.Frame(tf)
+    b_ign = ttk.Button(dec_bar, text="Ignora")
+    b_dup = ttk.Button(dec_bar, text="Duplica")
+    b_agg = ttk.Button(dec_bar, text="Aggiorna")
+    for b in (b_ign, b_dup, b_agg):
+        b.pack(side="right", padx=(6, 0))
+    lbl_dec = ttk.Label(dec_bar, text="", wraplength=520, justify="left")
+    lbl_dec.pack(side="left", fill="x", expand=True)
 
-    rows = {}           # iid → riga
+    rows = {}           # iid → riga (file)
+    dirs = {}           # iid → riepilogo della cartella (vista ad albero)
     data = {"web": None, "reg": None, "dec": set(), "sig": None}
 
     def compute():
@@ -208,8 +242,9 @@ def build_giano_tab(nb, root):
                 stato, tag = "Solo online", "online"
             out.append({"id": int(f["id"]), "name": f.get("name", ""), "dir": f.get("dir") or "", "size": int(f.get("size") or 0),
                         "v": int(f.get("version") or 0), "mv": int(r["version"]) if local else None, "stato": stato, "tag": tag,
-                        "local": os.path.join(base, r["path"]) if local else None, "kind": f.get("kind")})
-        data.update(web=w, rows=out)
+                        "local": os.path.join(base, r["path"]) if local else None, "kind": f.get("kind"),
+                        "can_decide": fid in dec})
+        data.update(web=w, rows=out, dec=dec)
         return out
 
     def matches(r):
@@ -222,8 +257,22 @@ def build_giano_tab(nb, root):
             return r["local"] is not None
         return r["stato"] == flt
 
+    def file_values(r, with_dir=True):
+        v = (r["dir"] or "—", _size(r["size"]), f"v{r['v']}", f"v{r['mv']}" if r["mv"] else "—", r["stato"])
+        return ((r["name"],) + v) if with_dir else (("",) + v)
+
+    def dir_summary(a):
+        bits = [f"{a['n']} file"]
+        if a["on"]:
+            bits.append(f"{len(a['on'])} solo online")
+        if a["dec"]:
+            bits.append(f"{a['dec']} da decidere")
+        if a["err"]:
+            bits.append(f"{a['err']} errori")
+        return " · ".join(bits)
+
     def fill_files(force=False):
-        sig = (_mtime(giano.WEBLIST), _mtime(giano.REGISTRY), v_filter.get(), v_search.get(), sort["col"], sort["rev"])
+        sig = (_mtime(giano.WEBLIST), _mtime(giano.REGISTRY), v_filter.get(), v_search.get(), sort["col"], sort["rev"], v_view.get())
         if not force and sig == data["sig"]:
             return
         data["sig"] = sig
@@ -248,25 +297,78 @@ def build_giano_tab(nb, root):
         sel = tv.selection()
         tv.delete(*tv.get_children())
         rows.clear()
-        for r in shown[:5000]:
-            iid = str(r["id"])
-            rows[iid] = r
-            tv.insert("", "end", iid=iid, tags=(r["tag"],) if r["tag"] else (),
-                      values=(r["name"], r["dir"] or "—", _size(r["size"]), f"v{r['v']}", f"v{r['mv']}" if r["mv"] else "—", r["stato"]))
-        if sel and sel[0] in rows:
+        dirs.clear()
+        if v_view.get() == "albero":
+            tv.configure(show="tree headings", displaycolumns=("dim", "giano", "mac", "stato"))
+            searching = bool(v_search.get().strip()) or v_filter.get() != "Tutti"
+            agg = {}
+            for r in shown:                      # riepilogo di ogni cartella (e delle sue antenate)
+                parts_ = r["dir"].split("/") if r["dir"] else []
+                for i in range(1, len(parts_) + 1):
+                    a = agg.setdefault("/".join(parts_[:i]), {"n": 0, "size": 0, "on": [], "dec": 0, "err": 0})
+                    a["n"] += 1
+                    a["size"] += r["size"]
+                    if r["stato"] == "Solo online":
+                        a["on"].append(r["id"])
+                    a["dec"] += r["stato"] == "Da decidere"
+                    a["err"] += r["stato"] == "Errore"
+            for path in sorted(agg, key=lambda p: [x.lower() for x in p.split("/")]):
+                a = agg[path]
+                parent = "d:" + path.rsplit("/", 1)[0] if "/" in path else ""
+                iid = "d:" + path
+                tag = "decidi" if a["dec"] else ("errore" if a["err"] else "dir")
+                tv.insert(parent, "end", iid=iid, text="📁  " + path.rsplit("/", 1)[-1], open=searching or path in open_dirs,
+                          tags=(tag, "dir") if tag != "dir" else ("dir",),
+                          values=("", "", _size(a["size"]), "", "", dir_summary(a)))
+                dirs[iid] = dict(a, path=path)
+            for r in shown:
+                iid = str(r["id"])
+                rows[iid] = r
+                tv.insert("d:" + r["dir"] if r["dir"] else "", "end", iid=iid, text=r["name"],
+                          tags=(r["tag"],) if r["tag"] else (), values=file_values(r, with_dir=False))
+        else:
+            tv.configure(show="headings", displaycolumns=cols)
+            for r in shown[:5000]:
+                iid = str(r["id"])
+                rows[iid] = r
+                tv.insert("", "end", iid=iid, tags=(r["tag"],) if r["tag"] else (), values=file_values(r))
+        if sel and (sel[0] in rows or sel[0] in dirs):
             tv.selection_set(sel[0])
+            tv.see(sel[0])
         on_select()
+
+    def on_open_close(opened):
+        iid = tv.focus()
+        if iid.startswith("d:"):
+            (open_dirs.add if opened else open_dirs.discard)(iid[2:])
+            save_prefs()
+    tv.bind("<<TreeviewOpen>>", lambda e: on_open_close(True))
+    tv.bind("<<TreeviewClose>>", lambda e: on_open_close(False))
 
     def current():
         s = tv.selection()
         return rows.get(s[0]) if s else None
 
+    def current_dir():
+        s = tv.selection()
+        return dirs.get(s[0]) if s else None
+
     def on_select(_e=None):
-        r = current()
+        r, d = current(), current_dir()
         for b in (b_porta, b_riscarica, b_show, b_open):
             b.state(["disabled"])
+        dec_bar.pack_forget()
+        if d:
+            b_porta.config(text=f"Porta sul Mac ({len(d['on'])})" if d["on"] else "Porta sul Mac")
+            if d["on"]:
+                b_porta.state(["!disabled"])
+            if os.path.isdir(os.path.join(folder(), d["path"])):
+                b_show.state(["!disabled"])
+            lbl_sel.config(text=f"Cartella «{d['path']}» · {dir_summary(d)} · {_size(d['size'])}")
+            return
+        b_porta.config(text="Porta sul Mac")
         if not r:
-            lbl_sel.config(text="Seleziona un file.")
+            lbl_sel.config(text="Seleziona un file" + (" o una cartella." if v_view.get() == "albero" else "."))
             return
         b_open.state(["!disabled"])
         if r["local"]:
@@ -276,9 +378,20 @@ def build_giano_tab(nb, root):
         elif r["stato"] in ("Solo online", "Errore"):
             b_porta.state(["!disabled"])
         lbl_sel.config(text=f"{r['name']} · {KINDS.get(r['kind'], r['kind'] or '')}")
+        if r["stato"] == "Da decidere" and r["can_decide"]:
+            lbl_dec.config(text=f"«{r['name']}» è cambiato sul Mac dopo l'invio. Aggiorna: la versione del Mac diventa quella nuova in Giano. "
+                                "Duplica: tieni tutte e due, quella del Mac come copia. Ignora: resta quella di Giano e il Mac la riprende.")
+            dec_bar.pack(fill="x", pady=(8, 0))
 
     def do_porta():
-        r = current()
+        r, d = current(), current_dir()
+        if d and d["on"]:
+            n = len(d["on"])
+            if n > 20 and not messagebox.askyesno("Porta sul Mac", f"Porto sul Mac {n} file della cartella «{d['path']}» ({_size(sum(x['size'] for x in rows.values() if x['id'] in d['on']))})?", parent=root):
+                return
+            giano.send_command("porta", ",".join(str(i) for i in d["on"]))
+            flash(f"{n} file della cartella «{d['path']}» scendono sul Mac al prossimo giro.")
+            return
         if not r:
             return
         giano.send_command("porta", r["id"])
@@ -291,8 +404,12 @@ def build_giano_tab(nb, root):
             flash(f"Riscarico «{r['name']}» al prossimo giro.")
 
     def do_show():
-        r = current()
-        if r and r["local"]:
+        r, d = current(), current_dir()
+        if d:
+            p_ = os.path.join(folder(), d["path"])
+            if os.path.isdir(p_):
+                subprocess.Popen(["open", p_])
+        elif r and r["local"]:
             subprocess.Popen(["open", "-R", r["local"]])
 
     def do_open():
@@ -300,14 +417,35 @@ def build_giano_tab(nb, root):
         if r:
             webbrowser.open(f"{server()}/giano/#/file/{r['id']}")
 
+    def decide(choice):
+        r = current()
+        if not r:
+            return
+        giano.send_command("decidi", f"{r['id']}:{choice}")
+        flash({"aggiorna": "Aggiorna", "duplica": "Duplica", "ignora": "Ignora"}[choice] + f": «{r['name']}» si sistema al prossimo giro (fra pochi secondi).")
+        dec_bar.pack_forget()
+
     b_porta.config(command=do_porta)
     b_riscarica.config(command=do_riscarica)
     b_show.config(command=do_show)
     b_open.config(command=do_open)
+    b_agg.config(command=lambda: decide("aggiorna"))
+    b_dup.config(command=lambda: decide("duplica"))
+    b_ign.config(command=lambda: decide("ignora"))
     tv.bind("<<TreeviewSelect>>", on_select)
-    tv.bind("<Double-1>", lambda e: (do_show() if (current() or {}).get("local") else do_open()))
+
+    def on_double(_e=None):
+        if current_dir():
+            return               # sulla cartella il doppio clic la apre e la chiude
+        do_show() if (current() or {}).get("local") else do_open()
+    tv.bind("<Double-1>", on_double)
     cb.bind("<<ComboboxSelected>>", lambda e: fill_files(force=True))
     v_search.trace_add("write", lambda *a: fill_files(force=True))
+
+    def show_decisions():
+        inner.select(tf)
+        v_filter.set("Da decidere")
+        fill_files(force=True)
 
     # ═══ SPAZIO ═════════════════════════════════════════════════════════════
     ts = ttk.Frame(inner, padding=10)
@@ -439,6 +577,51 @@ def build_giano_tab(nb, root):
             tva.insert("", "end", tags=() if a.get("ok", True) else ("err",),
                        values=(_hm(a.get("t")), ACT_ICON.get(a.get("k"), "·"), a.get("x", "")))
 
+    # ═══ IMPOSTAZIONI (v0.9.4) ═════════════════════════════════════════════
+    ti = ttk.Frame(inner, padding=14)
+    inner.add(ti, text="Impostazioni")
+    EVERY = [(60, "ogni minuto"), (300, "ogni 5 minuti"), (900, "ogni 15 minuti"), (1800, "ogni 30 minuti"), (3600, "ogni ora")]
+    g0 = conf_giano()
+    v_every = tk.StringVar(value=next((l for s_, l in EVERY if s_ == int(g0.get("interval_seconds", 60))), "ogni minuto"))
+    v_ext = tk.StringVar(value=", ".join(g0.get("exclude_ext") or []))
+    v_dirs = tk.StringVar(value=", ".join(g0.get("exclude_dirs") or []))
+    v_mb = tk.StringVar(value=str(g0.get("max_mb") or 0).rstrip("0").rstrip(".") if g0.get("max_mb") else "0")
+    r_ = 0
+    for label, widget, help_ in (
+        ("Un giro", ttk.Combobox(ti, textvariable=v_every, values=[l for _, l in EVERY], state="readonly", width=20),
+         "Ogni quanto l'agente allinea la cartella con Giano."),
+        ("Estensioni da non far salire", ttk.Entry(ti, textvariable=v_ext, width=44),
+         "Separate da virgole, per esempio: dmg, iso, tmp. I file con queste estensioni restano solo sul Mac."),
+        ("Cartelle da non far salire", ttk.Entry(ti, textvariable=v_dirs, width=44),
+         "Nomi di cartelle (ovunque si trovino), oppure un percorso dentro Giano: node_modules, Foto grandi, Clienti/Archivio."),
+        ("Limite di dimensione (MB)", ttk.Entry(ti, textvariable=v_mb, width=10),
+         "I file più grandi restano solo sul Mac. 0 = nessun limite (vale comunque il limite di Giano).")):
+        ttk.Label(ti, text=label).grid(column=0, row=r_, sticky="w", pady=(6, 0))
+        widget.grid(column=1, row=r_, sticky="w", pady=(6, 0), padx=(12, 0))
+        ttk.Label(ti, text=help_, style="Muted.TLabel", wraplength=560, justify="left").grid(column=1, row=r_ + 1, sticky="w", padx=(12, 0))
+        r_ += 2
+    ttk.Label(ti, style="Muted.TLabel", wraplength=700, justify="left",
+              text="Esclusioni e limite valgono per i file NUOVI della cartella: quelli già in Giano restano allineati. "
+                   "I file esclusi compaiono nell'Attività, una volta sola.").grid(column=0, row=r_, columnspan=2, sticky="w", pady=(14, 0))
+
+    def save_settings():
+        try:
+            mb = float((v_mb.get() or "0").replace(",", "."))
+            if mb < 0:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Giano", "Il limite di dimensione dev'essere un numero di MB (0 = nessun limite).", parent=root)
+            return
+        c = cfg.load_config()
+        g = c.setdefault("giano", {})
+        g["interval_seconds"] = next((s_ for s_, l in EVERY if l == v_every.get()), 60)
+        g["exclude_ext"] = [x.strip().lower().lstrip(".") for x in v_ext.get().split(",") if x.strip()]
+        g["exclude_dirs"] = [x.strip().strip("/") for x in v_dirs.get().split(",") if x.strip().strip("/")]
+        g["max_mb"] = mb
+        cfg.save_config(c)
+        flash("Impostazioni di Giano salvate: valgono dal prossimo giro.")
+    ttk.Button(ti, text="Salva", command=save_settings).grid(column=1, row=r_ + 1, sticky="w", padx=(12, 0), pady=(14, 0))
+
     # ═══ testata ════════════════════════════════════════════════════════════
     head_sig = [None]
 
@@ -462,7 +645,7 @@ def build_giano_tab(nb, root):
             lbl_detail.config(text=(s.get("error") or "") + (f"  ·  {s.get('fails')} giri di fila" if (s.get("fails") or 0) > 1 else "") + "  ·  riprovo da solo")
         elif n_dec:
             lbl_state.config(text=f"●  {n_dec} file {'aspetta' if n_dec == 1 else 'aspettano'} una decisione", style="GWarn.TLabel")
-            lbl_detail.config(text="Modificati sul Mac dopo l'invio: scegli in Giano sul web se aggiornare, duplicare o ignorare.")
+            lbl_detail.config(text="Modificati sul Mac dopo l'invio: scegli qui (Aggiorna, Duplica o Ignora) nella scheda File.")
         elif s.get("last_run"):
             lbl_state.config(text="●  Tutto allineato" + ("  ·  in pausa" if paused else ""), style="GWarn.TLabel" if paused else "GOk.TLabel")
             r = s.get("last_result") or {}
@@ -483,8 +666,10 @@ def build_giano_tab(nb, root):
             if lbl_detail.cget("text") == "":
                 lbl_detail.config(text="  ·  ".join(parts))
         # pulsanti
-        for b in (b_enable, b_sync, b_pause, b_finder, b_web):
+        for b in (b_enable, b_decide, b_sync, b_pause, b_finder, b_web):
             b.pack_forget()
+        if enabled and n_dec:
+            b_decide.pack(side="left", padx=(6, 0))
         if enabled:
             b_pause.config(text="Riprendi" if paused else "Metti in pausa")
             for b in (b_sync, b_pause, b_finder, b_web):

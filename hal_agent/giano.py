@@ -394,9 +394,19 @@ def _commands(srv, root: str, res: dict, prog) -> None:
     for name, arg in take_commands():
         try:
             if name in ("porta", "riscarica"):
-                fid = int(arg)
-                srv.agent("request", {"file_id": fid, "what": name})
-                activity("comando", ("Chiesto di portare sul Mac" if name == "porta" else "Chiesto di riscaricare") + f" il file {arg}", fid=fid)
+                ids = [int(x) for x in str(arg).split(",") if x.strip().isdigit()]
+                for fid in ids:
+                    srv.agent("request", {"file_id": fid, "what": name})
+                if ids:
+                    activity("comando", ("Chiesto di portare sul Mac " if name == "porta" else "Chiesto di riscaricare ")
+                             + (f"il file {ids[0]}" if len(ids) == 1 else f"{len(ids)} file"), fid=ids[0] if len(ids) == 1 else None)
+            elif name == "decidi":
+                fid, choice = str(arg).split(":", 1)
+                ans = srv.agent("decide", {"file_id": int(fid), "choice": choice})
+                if not ans.get("ok"):
+                    raise RuntimeError(ans.get("error") or "decisione rifiutata")
+                activity("decisione", {"aggiorna": "Scelto «Aggiorna»", "duplica": "Scelto «Duplica»", "ignora": "Scelto «Ignora»"}.get(choice, choice)
+                         + f" per il file {fid}: lo eseguo adesso", fid=int(fid))
             elif name == "svuota_cestino":
                 freed = empty_local_trash(root)
                 from .progress import fmt_size
@@ -406,6 +416,25 @@ def _commands(srv, root: str, res: dict, prog) -> None:
                 res["_want_overview"] = True
         except Exception as e:
             activity("errore", f"Comando «{name}» non eseguito: {e}", ok=False)
+
+
+def excluded(rel: str, size: int, g: dict) -> str:
+    """Perché un file NUOVO della cartella non sale (v0.9.4): '' se sale. Vale solo per i file
+    nuovi: quelli già in Giano restano allineati anche se poi li si esclude."""
+    name = os.path.basename(rel).lower()
+    ext = name.rsplit(".", 1)[-1] if "." in name else ""
+    exts = {e.strip().lower().lstrip(".") for e in (g.get("exclude_ext") or []) if e.strip()}
+    if ext and ext in exts:
+        return f"estensione .{ext} esclusa"
+    parts = [x.lower() for x in rel.split("/")[:-1]]
+    for orig in (g.get("exclude_dirs") or []):
+        d = orig.strip().strip("/").lower()
+        if d and ("/" in d and ("/".join(parts) + "/").startswith(d + "/") or d in parts):
+            return f"cartella «{orig.strip().strip('/')}» esclusa"
+    mb = float(g.get("max_mb") or 0)
+    if mb > 0 and size > mb * 1_000_000:
+        return f"più grande di {mb:g} MB"
+    return ""
 
 
 def _round(conf: dict, prog) -> tuple:
@@ -643,6 +672,13 @@ def _round(conf: dict, prog) -> tuple:
             # file nuovo
             if reg["skipped"].get(rel) == st.st_size:
                 continue
+            why = excluded(rel, st.st_size, g)
+            if why:
+                if reg.setdefault("excluded", {}).get(rel) != why:
+                    reg["excluded"][rel] = why
+                    activity("comando", f"«{os.path.basename(rel)}» non sale a Giano: {why}")
+                continue
+            reg.get("excluded", {}).pop(rel, None)
             if st.st_size > srv.max_file:
                 reg["skipped"][rel] = st.st_size
                 activity("errore", f"«{os.path.basename(rel)}» è troppo grande per Giano: resta solo sul Mac", ok=False)
