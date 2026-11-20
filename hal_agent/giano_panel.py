@@ -26,7 +26,8 @@ KINDS = {"pdf": "PDF", "documento": "Word e documenti", "foglio": "Fogli", "pres
          "immagine": "Immagini", "scansione": "Scansioni", "testo": "Testi", "pagina_web": "Pagine web",
          "audio": "Audio", "video": "Video", "archivio": "Archivi", "altro": "Altro"}
 PREFS = cfg.CONFIG_DIR / "giano_pannello.json"   # Elenco/Albero e cartelle aperte
-FILTERS = ["Tutti", "Sul Mac", "Solo online", "Il Mac è indietro", "Da decidere", "In coda per il Mac", "Errore"]
+FILTERS = ["Tutti", "Sul Mac", "Solo online", "In attesa di salire", "Il Mac è indietro", "Da decidere", "In coda per il Mac", "Errore", "Escluso"]
+LOCAL_EVERY = 4        # secondi fra due letture della cartella del Mac
 ACT_ICON = {"invio": "↑", "scarico": "↓", "sposto": "→", "cestino": "🗑", "modifica": "✎", "decisione": "✓",
             "ocr": "Aa", "errore": "!", "comando": "›"}
 
@@ -249,8 +250,62 @@ def build_giano_tab(nb, root):
                         "v": int(f.get("version") or 0), "mv": int(r["version"]) if local else None, "stato": stato, "tag": tag,
                         "local": os.path.join(base, r["path"]) if local else None, "kind": f.get("kind"),
                         "can_decide": fid in dec})
+        # v0.9.7: anche ciò che c'è SOLO sul Mac. L'elenco di Giano arriva a fine giro: senza
+        # questo, una cartella appena incollata in ~/Giano non si vede finché il giro non finisce.
+        seen = {str(f["id"]) for f in w.get("files", [])}
+        known = set()
+        for fid, r in reg.items():
+            known.add(r["path"])
+            if fid in seen:
+                continue
+            p_ = os.path.join(base, r["path"])
+            if not os.path.exists(p_):
+                continue
+            d_, n_ = os.path.split(r["path"])
+            out.append({"id": int(fid), "name": n_, "dir": d_, "size": int(r.get("size") or 0), "v": int(r.get("version") or 1),
+                        "mv": int(r.get("version") or 1), "stato": "Appena salito", "tag": "", "local": p_,
+                        "kind": "", "can_decide": False})
+        step = (giano.read_json(giano.STATE, {}).get("step") or "") if giano.read_json(giano.STATE, {}).get("running") else ""
+        g = conf_giano()
+        for rel, size in local_files(base):
+            if rel in known:
+                continue
+            d_, n_ = os.path.split(rel)
+            why = giano.excluded(rel, size, g)
+            if why:
+                stato, tag = "Escluso", "online"
+            elif f"«{n_}»" in step:
+                stato, tag = "Sta salendo", "indietro"
+            else:
+                stato, tag = "In attesa di salire", "indietro"
+            out.append({"id": None, "iid": "l:" + rel, "name": n_, "dir": d_, "size": size, "v": 0, "mv": None,
+                        "stato": stato, "tag": tag, "local": os.path.join(base, rel), "kind": "", "can_decide": False,
+                        "why": why})
+        for r in out:
+            r.setdefault("iid", str(r["id"]))
         data.update(web=w, rows=out, dec=dec)
         return out
+
+    local_cache = {"at": 0.0, "root": "", "items": []}
+
+    def local_files(base):
+        """I file della cartella del Mac (come li vede il giro), riletti al più ogni LOCAL_EVERY secondi."""
+        if local_cache["root"] == base and time.time() - local_cache["at"] < LOCAL_EVERY:
+            return local_cache["items"]
+        items = []
+        if os.path.isdir(base):
+            for p_ in giano._iter_local(base):
+                rel = os.path.relpath(p_, base).replace(os.sep, "/")
+                if rel.startswith(giano.TRASH_DIR + "/"):
+                    continue
+                try:
+                    items.append((rel, os.path.getsize(p_)))
+                except OSError:
+                    pass
+                if len(items) > 20000:
+                    break
+        local_cache.update(at=time.time(), root=base, items=items)
+        return items
 
     def matches(r):
         flt, q = v_filter.get(), v_search.get().strip().lower()
@@ -274,23 +329,30 @@ def build_giano_tab(nb, root):
             bits.append(f"{a['dec']} da decidere")
         if a["err"]:
             bits.append(f"{a['err']} errori")
+        if a.get("up"):
+            bits.append(f"{a['up']} da far salire")
         return " · ".join(bits)
 
     def fill_files(force=False):
-        sig = (_mtime(giano.WEBLIST), _mtime(giano.REGISTRY), v_filter.get(), v_search.get(), sort["col"], sort["rev"], v_view.get())
+        st_ = giano.read_json(giano.STATE, {})
+        sig = (_mtime(giano.WEBLIST), _mtime(giano.REGISTRY), v_filter.get(), v_search.get(), sort["col"], sort["rev"], v_view.get(),
+               int(time.time() // LOCAL_EVERY), st_.get("step") if st_.get("running") else "")
         if not force and sig == data["sig"]:
             return
         data["sig"] = sig
         allr = compute()
         w = data["web"] or {}
-        if not w.get("files") and not w.get("at"):
+        if not allr and not w.get("at"):
             lbl_counts.config(text="L'elenco dei file arriva al prossimo giro (o con «Aggiorna l'elenco»).")
         else:
             n_mac = sum(1 for r in allr if r["local"])
             n_on = sum(1 for r in allr if r["stato"] == "Solo online")
             n_dec = sum(1 for r in allr if r["stato"] == "Da decidere")
             n_err = sum(1 for r in allr if r["stato"] == "Errore")
+            n_up = sum(1 for r in allr if r["stato"] in ("In attesa di salire", "Sta salendo"))
             parts = [f"{len(allr)} file", f"{n_mac} sul Mac", f"{n_on} solo online"]
+            if n_up:
+                parts.append(f"{n_up} da far salire")
             if n_dec:
                 parts.append(f"{n_dec} da decidere")
             if n_err:
@@ -310,31 +372,32 @@ def build_giano_tab(nb, root):
             for r in shown:                      # riepilogo di ogni cartella (e delle sue antenate)
                 parts_ = r["dir"].split("/") if r["dir"] else []
                 for i in range(1, len(parts_) + 1):
-                    a = agg.setdefault("/".join(parts_[:i]), {"n": 0, "size": 0, "on": [], "dec": 0, "err": 0})
+                    a = agg.setdefault("/".join(parts_[:i]), {"n": 0, "size": 0, "on": [], "dec": 0, "err": 0, "up": 0})
                     a["n"] += 1
                     a["size"] += r["size"]
                     if r["stato"] == "Solo online":
                         a["on"].append(r["id"])
                     a["dec"] += r["stato"] == "Da decidere"
                     a["err"] += r["stato"] == "Errore"
+                    a["up"] += r["stato"] in ("In attesa di salire", "Sta salendo")
             for path in sorted(agg, key=lambda p: [x.lower() for x in p.split("/")]):
                 a = agg[path]
                 parent = "d:" + path.rsplit("/", 1)[0] if "/" in path else ""
                 iid = "d:" + path
-                tag = "decidi" if a["dec"] else ("errore" if a["err"] else "dir")
+                tag = "decidi" if a["dec"] else ("errore" if a["err"] else ("indietro" if a["up"] else "dir"))
                 tv.insert(parent, "end", iid=iid, text="📁  " + path.rsplit("/", 1)[-1], open=searching or path in open_dirs,
                           tags=(tag, "dir") if tag != "dir" else ("dir",),
                           values=("", "", _size(a["size"]), "", "", dir_summary(a)))
                 dirs[iid] = dict(a, path=path)
             for r in shown:
-                iid = str(r["id"])
+                iid = r["iid"]
                 rows[iid] = r
                 tv.insert("d:" + r["dir"] if r["dir"] else "", "end", iid=iid, text=r["name"],
                           tags=(r["tag"],) if r["tag"] else (), values=file_values(r, with_dir=False))
         else:
             tv.configure(show="headings", displaycolumns=cols)
             for r in shown[:5000]:
-                iid = str(r["id"])
+                iid = r["iid"]
                 rows[iid] = r
                 tv.insert("", "end", iid=iid, tags=(r["tag"],) if r["tag"] else (), values=file_values(r))
         if sel and (sel[0] in rows or sel[0] in dirs):
@@ -375,14 +438,16 @@ def build_giano_tab(nb, root):
         if not r:
             lbl_sel.config(text="Seleziona un file" + (" o una cartella." if v_view.get() == "albero" else "."))
             return
-        b_open.state(["!disabled"])
+        if r["id"]:
+            b_open.state(["!disabled"])
         if r["local"]:
             b_show.state(["!disabled"])
             if r["stato"] == "Il Mac è indietro":
                 b_riscarica.state(["!disabled"])
         elif r["stato"] in ("Solo online", "Errore"):
             b_porta.state(["!disabled"])
-        lbl_sel.config(text=f"{r['name']} · {KINDS.get(r['kind'], r['kind'] or '')}")
+        lbl_sel.config(text=f"{r['name']} · " + (KINDS.get(r['kind'], r['kind'] or '') if r["id"] else
+                       ("non sale a Giano: " + r["why"] if r.get("why") else "sale a Giano con il giro" if r["stato"] != "Sta salendo" else "sta salendo adesso")))
         if r["stato"] == "Da decidere" and r["can_decide"]:
             lbl_dec.config(text=f"«{r['name']}» è cambiato sul Mac dopo l'invio. Aggiorna: la versione del Mac diventa quella nuova in Giano. "
                                 "Duplica: tieni tutte e due, quella del Mac come copia. Ignora: resta quella di Giano e il Mac la riprende.")
@@ -419,7 +484,7 @@ def build_giano_tab(nb, root):
 
     def do_open():
         r = current()
-        if r:
+        if r and r["id"]:
             webbrowser.open(f"{server()}/giano/#/file/{r['id']}")
 
     def decide(choice):
@@ -680,6 +745,7 @@ def build_giano_tab(nb, root):
             flash_until[0] = 0
         enabled, paused = bool(g.get("enabled")), bool(g.get("paused"))
         n_dec = sum(1 for r in (data.get("rows") or []) if r["stato"] == "Da decidere")
+        n_up = sum(1 for r in (data.get("rows") or []) if r["stato"] in ("In attesa di salire", "Sta salendo"))
         if not enabled:
             lbl_state.config(text="○  Giano è spento su questo Mac", style="GOff.TLabel")
             lbl_detail.config(text="Accendilo per allineare la cartella " + folder().replace(os.path.expanduser("~"), "~") + " con Giano.")
@@ -692,6 +758,9 @@ def build_giano_tab(nb, root):
         elif n_dec:
             lbl_state.config(text=f"●  {n_dec} file {'aspetta' if n_dec == 1 else 'aspettano'} una decisione", style="GWarn.TLabel")
             lbl_detail.config(text="Modificati sul Mac dopo l'invio: scegli qui (Aggiorna, Duplica o Ignora) nella scheda File.")
+        elif n_up:
+            lbl_state.config(text=f"◐  {n_up} file {'aspetta' if n_up == 1 else 'aspettano'} di salire", style="GRun.TLabel")
+            lbl_detail.config(text="Sono nella cartella del Mac: salgono a Giano con il prossimo giro.")
         elif s.get("last_run"):
             lbl_state.config(text="●  Tutto allineato" + ("  ·  in pausa" if paused else ""), style="GWarn.TLabel" if paused else "GOk.TLabel")
             r = s.get("last_result") or {}
