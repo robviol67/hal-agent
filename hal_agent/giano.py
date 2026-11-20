@@ -602,6 +602,39 @@ def _round(conf: dict, prog) -> tuple:
         subprocess.Popen(["open", path])
         srv.agent("edit_open", {"file_id": int(fid)})
 
+    # ── 2b. eliminati PER SEMPRE in Giano (v0.9.9): il server non li conosce più. Vanno nel cestino
+    #       locale, mai cancellati. Protezione: se sparisce più di metà dei file, non si tocca niente.
+    gone = [fid for fid in list(F.keys()) if fid not in web]
+    if gone and len(gone) > 5 and len(gone) > len(F) / 2:
+        activity("errore", f"Giano non riconosce {len(gone)} file del Mac su {len(F)}: per prudenza non tocco niente. "
+                           "Se li hai eliminati davvero, tornerò a sistemarli quando saranno meno della metà.", ok=False)
+        gone = []
+    if gone:
+        try:
+            still = {str(x) for x in (srv.agent("exists", {"ids": [int(x) for x in gone]}).get("ids") or [])}
+        except Exception as ex:
+            log.info("controllo dei file spariti non riuscito: %s", ex)
+            still, gone = set(), []
+        for fid in [x for x in gone if x in still]:      # ci sono ancora: mancava solo l'avviso «è sul Mac»
+            try:
+                srv.agent("synced", {"file_id": int(fid), "version": F[fid]["version"]})
+            except Exception:
+                pass
+        gone = [x for x in gone if x not in still]
+    for fid in gone:
+        p_ = path_of(fid)
+        try:
+            if p_ and os.path.exists(p_):
+                _to_trash(root, p_)
+                activity("cestino", f"«{os.path.basename(p_)}» eliminato per sempre in Giano: messo nel cestino locale", fid=int(fid))
+                res["deleted"] += 1
+            del F[fid]
+        except Exception as ex:
+            log.warning("file eliminato in Giano %s non spostato: %s", fid, ex)
+            res["errors"] += 1
+    if gone:
+        save_registry(reg)
+
     # ── 3. allinea al web
     for fid, e in web.items():
         try:
