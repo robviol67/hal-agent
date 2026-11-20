@@ -57,6 +57,29 @@ def _parse_version(v: str):
     return tuple(out) if out else (0,)
 
 
+def _short(text: str, n: int = 52) -> str:
+    """Testo per il menu (v0.9.8): percorsi leggibili e lunghezza fissa, così il menu non si allarga.
+    «/Users/x/Library/Mobile Documents/com~apple~CloudDocs/HAL/libri» → «iCloud Drive/HAL/libri»."""
+    s = str(text or "")
+    home = os.path.expanduser("~")
+    s = s.replace(home + "/Library/Mobile Documents/com~apple~CloudDocs", "iCloud Drive")
+    s = s.replace(home, "~")
+    if len(s) > n:
+        # un percorso lungo (dal suo inizio fino in fondo) diventa «inizio/…/ultime/due»
+        idx = [i for i in (s.find("iCloud Drive/"), s.find("~/"), s.find(" /") + 1 if " /" in s else -1, 0 if s.startswith("/") else -1) if i >= 0]
+        if idx:
+            i = min(idx)
+            parts = s[i:].split("/")
+            if len(parts) > 3:
+                s = s[:i] + parts[0] + "/…/" + "/".join(parts[-2:])
+            if len(s) > n and len(parts) > 1:
+                s = s[:i] + "…/" + parts[-1]
+    if len(s) > n:
+        keep = n - 1
+        s = s[: keep * 2 // 3] + "…" + s[-(keep - keep * 2 // 3):]
+    return s
+
+
 def _latest_release():
     """Tag dell'ultima release su GitHub, o None se non raggiungibile."""
     try:
@@ -145,12 +168,7 @@ def run_tray():
         folder = str((cfg.load_config().get(section) or {}).get("folder") or "")
         if not folder:
             return "Cartella: (non impostata)"
-        home = os.path.expanduser("~")
-        if folder.startswith(home):
-            folder = "~" + folder[len(home):]
-        if len(folder) > 40:
-            folder = "…" + folder[-39:]
-        return "Cartella: " + folder
+        return "Cartella: " + _short(folder, 40)
 
     def _library_folder_label():
         return _folder_label("library")
@@ -426,15 +444,15 @@ def run_tray():
 
     menu = pystray.Menu(
         I(f"HAL Agent v{__version__}", None, sf="sparkles", enabled=False),
-        I(lambda item: f"Stato: {status['text']}", on_status, sf="waveform.path.ecg"),
+        I(lambda item: "Stato: " + _short(status['text'], 52), on_status, sf="waveform.path.ecg"),
         I("Apri pannello…", on_open_panel, sf="macwindow", default=True),
         H("Giano"),
-        I("Giano (cartella del Mac)", on_toggle_giano, sf="archivebox",
+        I("Giano (cartella del Mac)", on_toggle_giano, mark="giano",
           checked=lambda item: _giano_enabled()),
         I(lambda item: _folder_label("giano"), on_open_giano_folder, sf="folder"),
         I("Scegli la cartella di Giano…", on_pick_giano_folder, sf="folder.badge.gearshape"),
         I("Allinea Giano ora", on_sync_giano, sf="arrow.triangle.2.circlepath"),
-        I("Pannello di Giano…", on_open_panel, sf="list.bullet.rectangle"),
+        I("Pannello di Giano…", on_open_panel, sf="macwindow.on.rectangle"),
         H("Raccolta per HAL"),
         I("Raccogli ora", on_run_now, sf="arrow.down.circle"),
         I("Frequenza raccolta", freq_menu, sf="clock"),
