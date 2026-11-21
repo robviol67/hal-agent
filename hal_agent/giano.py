@@ -782,7 +782,9 @@ def _round(conf: dict, prog) -> tuple:
                 continue
             # file nuovo
             if reg["skipped"].get(rel) == st.st_size:
-                continue
+                if st.st_size > srv.max_file:
+                    continue
+                reg["skipped"].pop(rel, None)       # v0.9.11: il limite di Giano è salito, si ritenta
             why = excluded(rel, st.st_size, g)
             if why:
                 if reg.setdefault("excluded", {}).get(rel) != why:

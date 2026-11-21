@@ -276,7 +276,7 @@ def build_giano_tab(nb, root):
             why = giano.excluded(rel, size, g)
             if not why and skipped.get(rel) == size:     # v0.9.10: scartato dal giro (oltre il limite di Giano)
                 from .progress import fmt_size
-                why = f"troppo grande ({fmt_size(size)}, Giano accetta fino a 200 MB)"
+                why = f"troppo grande per Giano ({fmt_size(size)})"
             if why:
                 stato, tag = "Escluso", "online"
             elif f"«{n_}»" in step:
