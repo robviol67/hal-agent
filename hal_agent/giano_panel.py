@@ -228,7 +228,9 @@ def build_giano_tab(nb, root):
 
     def compute():
         w = giano.read_json(giano.WEBLIST, {})
-        reg = giano.load_registry().get("files", {})
+        _regall = giano.load_registry()
+        reg = _regall.get("files", {})
+        skipped = _regall.get("skipped", {})
         dec = {str(d.get("file_id")) for d in w.get("decisions", [])}
         base = folder()
         out = []
@@ -272,6 +274,9 @@ def build_giano_tab(nb, root):
                 continue
             d_, n_ = os.path.split(rel)
             why = giano.excluded(rel, size, g)
+            if not why and skipped.get(rel) == size:     # v0.9.10: scartato dal giro (oltre il limite di Giano)
+                from .progress import fmt_size
+                why = f"troppo grande ({fmt_size(size)}, Giano accetta fino a 200 MB)"
             if why:
                 stato, tag = "Escluso", "online"
             elif f"«{n_}»" in step:
