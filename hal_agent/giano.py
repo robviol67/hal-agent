@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -465,6 +466,38 @@ def check_all(conf: dict, prog, res: dict) -> None:
     activity("comando", f"Controllo finito: {len(items)} file verificati" + (", tutti uguali a Giano" if not bad else f", {len(bad)} diversi"))
 
 
+DIARIO_DIR = cfg.CONFIG_DIR / "giano_diario"
+
+
+def _diario(srv) -> None:
+    """v0.9.12: la copia del «diario dei nomi» di Giano sul Mac (~/.hal-agent/giano_diario).
+
+    Sul server il diario (cartelle, nomi, versioni, tag) sta accanto ai contenuti, fuori dal
+    database; qui se ne tiene una copia per giorno, le ultime 7, aggiornata ogni 6 ore.
+    """
+    try:
+        DIARIO_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = DIARIO_DIR / ".ultimo"
+        if stamp.exists() and time.time() - stamp.stat().st_mtime < 6 * 3600:
+            return
+        for fmt in ("tsv", "sqlite"):
+            r = srv.c.get(f"{srv.base}/api/giano/agent.php", params={"action": "diario", "formato": fmt})
+            if r.status_code != 200:
+                return
+            name = re.sub(r"[^0-9A-Za-z_-]", "", r.headers.get("X-Giano-Diario", "")) or time.strftime("giano-%Y-%m-%d")
+            tmp = DIARIO_DIR / f".{name}.{fmt}.part"
+            tmp.write_bytes(r.content)
+            os.replace(tmp, DIARIO_DIR / f"{name}.{fmt}")
+        stamp.touch()
+        days = sorted({m.group(1) for f in DIARIO_DIR.iterdir() if (m := re.match(r"giano-(\d{4}-\d\d-\d\d)", f.name))}, reverse=True)
+        for f in DIARIO_DIR.iterdir():
+            m = re.match(r"giano-(\d{4}-\d\d-\d\d)", f.name)
+            if m and m.group(1) not in days[:7]:
+                f.unlink(missing_ok=True)
+    except Exception as ex:      # mai bloccare il giro per il diario
+        log.warning("diario di Giano non scaricato: %s", ex)
+
+
 def _commands(srv, root: str, res: dict, prog) -> None:
     """I comandi lasciati dal pannello."""
     for name, arg in take_commands():
@@ -534,6 +567,7 @@ def _round(conf: dict, prog) -> tuple:
         srv.chunk = int(h.get("chunk") or srv.chunk)
         srv.max_file = int(h.get("max_file") or srv.max_file)
         _commands(srv, root, res, prog)
+        _diario(srv)
         data = srv.agent("sync")
     except Exception as e:
         res.update(ok=False, error_msg=str(e)[:200])
