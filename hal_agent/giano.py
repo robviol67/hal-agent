@@ -307,6 +307,35 @@ def _to_trash(root: str, path: str) -> None:
     shutil.move(path, dest)
 
 
+def _tidy_dirs(root: str, dirs: set, live) -> int:
+    """Cartelle rimaste vuote sul Mac dopo spostamenti o eliminazioni fatte sul web (v0.9.13).
+    Si tolgono solo se Giano non le ha più fra le sue e dentro non c'è niente (al massimo .DS_Store)."""
+    if live is None or not dirs:
+        return 0
+    import unicodedata
+    key = lambda s: unicodedata.normalize("NFC", s).lower()
+    live = {key(x) for x in live}
+    rootn, n = os.path.normpath(root), 0
+    for d in sorted({os.path.normpath(x) for x in dirs}, key=len, reverse=True):
+        while d.startswith(rootn + os.sep):
+            rel = _rel(root, d)
+            if key(rel) in live or rel.split("/")[0].startswith("."):
+                break
+            try:
+                items = os.listdir(d)
+                if any(x != ".DS_Store" for x in items):
+                    break
+                for x in items:
+                    os.remove(os.path.join(d, x))
+                os.rmdir(d)
+                n += 1
+                log.info("tolta la cartella vuota %s", rel)
+            except OSError:
+                break
+            d = os.path.dirname(d)
+    return n
+
+
 def _iter_local(root: str):
     for d, dirs, files in os.walk(root):
         dirs[:] = [x for x in dirs if not x.startswith(".")]
@@ -655,10 +684,12 @@ def _round(conf: dict, prog) -> tuple:
             except Exception:
                 pass
         gone = [x for x in gone if x not in still]
+    gone_dirs = set()
     for fid in gone:
         p_ = path_of(fid)
         try:
             if p_ and os.path.exists(p_):
+                gone_dirs.add(os.path.dirname(p_))
                 _to_trash(root, p_)
                 activity("cestino", f"«{os.path.basename(p_)}» eliminato per sempre in Giano: messo nel cestino locale", fid=int(fid))
                 res["deleted"] += 1
@@ -670,12 +701,14 @@ def _round(conf: dict, prog) -> tuple:
         save_registry(reg)
 
     # ── 3. allinea al web
+    left = set(gone_dirs)  # cartelle da cui sono usciti file: se restano vuote e Giano non le ha più, si tolgono
     for fid, e in web.items():
         try:
             target_rel = _web_rel(e)
             target = os.path.join(root, target_rel)
             if e.get("trashed"):
                 if fid in F:
+                    left.add(os.path.dirname(path_of(fid)))
                     _to_trash(root, path_of(fid))
                     del F[fid]
                     res["deleted"] += 1
@@ -695,6 +728,7 @@ def _round(conf: dict, prog) -> tuple:
                 if os.path.exists(cur) and r["path"] != target_rel:
                     if not os.path.exists(target):
                         os.makedirs(os.path.dirname(target), exist_ok=True)
+                        left.add(os.path.dirname(cur))
                         shutil.move(cur, target)
                         activity("sposto", f"Spostato «{e['name']}» → {e.get('dir') or 'cartella principale'}", fid=int(fid))
                         r["path"] = target_rel
@@ -744,6 +778,10 @@ def _round(conf: dict, prog) -> tuple:
             activity("errore", f"«{e.get('name', fid)}»: allineamento non riuscito ({ex})", ok=False, fid=int(fid))
             res["errors"] += 1
     save_registry(reg)
+    try:
+        _tidy_dirs(root, left, data.get("folders"))
+    except Exception as ex:
+        log.info("pulizia delle cartelle vuote non riuscita: %s", ex)
 
     # ── 3b. riconoscimento del testo delle scansioni (Vision di macOS)
     for job in data.get("ocr", []):
