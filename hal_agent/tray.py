@@ -9,7 +9,7 @@ import webbrowser
 
 from . import config as cfg
 from . import __version__
-from .runner import Loop, BridgeLoop, LibraryLoop, DocumentsLoop, TranscriptLoop, VideoLoop, ConvertLoop, GianoLoop
+from .runner import Loop, BridgeLoop, LibraryLoop, DocumentsLoop, TranscriptLoop, VideoLoop, ConvertLoop
 
 log = logging.getLogger("hal_agent.tray")
 
@@ -107,47 +107,6 @@ def run_tray():
     converter = ConvertLoop(on_status=lambda s: status.__setitem__("text", s))
     holder = {"icon": None}
 
-    def _notify(msg, title="HAL Agent · Giano"):
-        if holder["icon"] is not None:
-            holder["icon"].notify(msg, title)
-    giano_loop = GianoLoop(on_status=lambda s: status.__setitem__("text", s), on_notify=_notify)
-
-    def _giano_enabled():
-        return bool((cfg.load_config().get("giano") or {}).get("enabled"))
-
-    def on_toggle_giano(icon, item):
-        c = cfg.load_config()
-        g = c.setdefault("giano", {})
-        g["enabled"] = not bool(g.get("enabled"))
-        cfg.save_config(c)
-        if g["enabled"]:
-            os.makedirs(os.path.expanduser(g.get("folder") or "~/Giano"), exist_ok=True)
-            icon.notify("Giano ATTIVO: i file della cartella salgono a Giano; nomi e posizioni "
-                        "li decide Giano. Se modifichi un file già inviato, Giano ti chiede "
-                        "«aggiorna o duplica?».", "HAL Agent")
-            giano_loop.trigger_now()
-        else:
-            icon.notify("Giano spento: la cartella non viene più allineata.", "HAL Agent")
-
-    def on_sync_giano(icon, item):
-        if not (cfg.load_config().get("token")):
-            icon.notify("Configura prima il collegamento (server + token).", "HAL Agent")
-            return
-        giano_loop.trigger_now()
-        icon.notify("Giano: allineamento avviato.", "HAL Agent")
-
-    def on_pick_giano_folder(icon, item):
-        if not _open_ui("pickfolder", "--giano"):
-            _open_config_file()
-
-    def on_open_giano_folder(icon, item):
-        folder = os.path.expanduser((cfg.load_config().get("giano") or {}).get("folder") or "~/Giano")
-        os.makedirs(folder, exist_ok=True)
-        try:
-            import subprocess
-            subprocess.Popen(["open", folder])
-        except Exception:
-            pass
 
     def _bridge_enabled():
         return bool((cfg.load_config().get("llm_bridge") or {}).get("enabled"))
@@ -422,7 +381,6 @@ def run_tray():
         transcripts.stop()
         video.stop()
         converter.stop()
-        giano_loop.stop()
         icon.stop()
 
     freq_menu = pystray.Menu(*[
@@ -446,13 +404,6 @@ def run_tray():
         I(f"HAL Agent v{__version__}", None, sf="sparkles", enabled=False),
         I(lambda item: "Stato: " + _short(status['text'], 52), on_status, sf="waveform.path.ecg"),
         I("Apri pannello…", on_open_panel, sf="macwindow", default=True),
-        H("Giano"),
-        I("Giano (cartella del Mac)", on_toggle_giano, mark="giano",
-          checked=lambda item: _giano_enabled()),
-        I(lambda item: _folder_label("giano"), on_open_giano_folder, sf="folder"),
-        I("Scegli la cartella di Giano…", on_pick_giano_folder, sf="folder.badge.gearshape"),
-        I("Allinea Giano ora", on_sync_giano, sf="arrow.triangle.2.circlepath"),
-        I("Pannello di Giano…", on_open_panel, sf="macwindow.on.rectangle"),
         H("Raccolta per HAL"),
         I("Raccogli ora", on_run_now, sf="arrow.down.circle"),
         I("Frequenza raccolta", freq_menu, sf="clock"),
@@ -515,5 +466,4 @@ def run_tray():
     transcripts.start()
     video.start()
     converter.start()
-    giano_loop.start()
     icon.run()

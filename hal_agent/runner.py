@@ -335,67 +335,6 @@ class DocumentsLoop:
         self._stop.set()
 
 
-class GianoLoop:
-    """
-    Loop di Giano (v0.8.0): se giano.enabled, ogni giano.interval_seconds allinea
-    la cartella ~/Giano con Giano su hal-ai.it (giano.sync_once). Rilegge la config a
-    ogni giro; trigger_now() forza un giro subito.
-    """
-    def __init__(self, on_status=None, on_notify=None):
-        self._stop = threading.Event()
-        self._thread = None
-        self._trigger = threading.Event()
-        self.on_status = on_status or (lambda s: None)
-        self.on_notify = on_notify or (lambda s: None)     # v0.9.5: notifiche di macOS
-        self._busy = threading.Lock()
-
-    def _status(self, msg):
-        try:
-            self.on_status(msg)
-        except Exception:
-            pass
-        telemetry.set_status(msg)
-
-    def _run(self):
-        last = 0.0
-        while not self._stop.is_set():
-            conf = cfg.load_config()
-            g = conf.get("giano", {}) or {}
-            interval = max(20, int(g.get("interval_seconds", 60)))
-            from . import giano
-            forced = self._trigger.is_set() or (g.get("enabled") and giano.pending_commands())
-            if forced:
-                self._trigger.clear()
-            # in pausa (dal pannello): niente giri automatici; «Allinea ora» funziona lo stesso
-            if forced or (g.get("enabled") and not g.get("paused") and time.monotonic() - last >= interval):
-                last = time.monotonic()
-                with self._busy:
-                    try:
-                        res = giano.sync_once(conf, on_progress=self._status)
-                        for msg in (res or {}).get("notify") or []:
-                            try:
-                                self.on_notify(msg)
-                            except Exception:
-                                pass
-                    except Exception as e:
-                        log.error("Giano: giro fallito: %s", e)
-                        self._status(f"Giano: errore {e}")
-            self._stop.wait(3)
-
-    def trigger_now(self):
-        self._trigger.set()
-
-    def start(self):
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
-
-
 class TranscriptLoop:
     """
     Loop delle trascrizioni per il sito: ogni transcripts.poll_seconds guarda la

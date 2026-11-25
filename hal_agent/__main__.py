@@ -55,10 +55,6 @@ def main(argv=None):
                     help="Sceglie la cartella dei Documenti invece di quella dei Libri")
     pf.add_argument("--video", action="store_true",
                     help="Sceglie la cartella degli elenchi di video YouTube")
-    pf.add_argument("--giano", action="store_true",
-                    help="Sceglie la cartella del Mac da allineare con Giano")
-    pg = sub.add_parser("giano", help="Un giro di allineamento con Giano (cartella ~/Giano)")
-    pg.add_argument("--once", action="store_true")
 
     pb = sub.add_parser("bridge", help="Ponte LLM locale (Ollama/LM Studio)")
     pb.add_argument("--once", action="store_true")
@@ -157,14 +153,8 @@ def main(argv=None):
 
     if args.cmd == "pickfolder":
         from . import folder_picker
-        folder_picker.open_folder_picker("giano" if args.giano else ("video" if args.video else ("documents" if args.documents else "library")))
+        folder_picker.open_folder_picker("video" if args.video else ("documents" if args.documents else "library"))
         return 0
-
-    if args.cmd == "giano":
-        from . import giano
-        res = giano.sync_once(on_progress=print)
-        print(res)
-        return 0 if res.get("ok") else 1
 
     if args.cmd == "transcript":
         from . import transcripts
